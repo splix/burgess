@@ -3,7 +3,9 @@
 use std::fmt;
 use std::str::FromStr;
 
+use jiff::Timestamp;
 use jiff::civil::Date;
+use jiff::tz::Offset;
 
 /// The text form of a day.
 const FORMAT: &str = "%Y%m%d";
@@ -32,6 +34,16 @@ pub enum DayError {
         /// The rejected year.
         year: i16,
     },
+}
+
+impl Day {
+    /// The UTC day of `time`.
+    ///
+    /// UTC, so the day boundary does not move with the writer host's time
+    /// zone or daylight saving, and matches the UTC timestamps in the files.
+    pub fn utc(time: Timestamp) -> Result<Self, DayError> {
+        Day::try_from(Offset::UTC.to_datetime(time).date())
+    }
 }
 
 impl TryFrom<Date> for Day {
@@ -124,6 +136,14 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    #[test]
+    fn utc_day_changes_at_utc_midnight() {
+        let before: Timestamp = "2026-09-27T23:59:59.999Z".parse().unwrap();
+        let after: Timestamp = "2026-09-28T00:00:00Z".parse().unwrap();
+        assert_eq!(Day::utc(before), Ok(day(2026, 9, 27)));
+        assert_eq!(Day::utc(after), Ok(day(2026, 9, 28)));
     }
 
     #[test]

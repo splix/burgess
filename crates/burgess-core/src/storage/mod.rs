@@ -8,10 +8,14 @@
 mod day;
 mod frame;
 mod manifest;
+mod object_name;
+mod writer_id;
 
 pub use day::{Day, DayError};
 pub use frame::FrameError;
 pub use manifest::{DayManifest, EntryProblem, FileStats, FlushEntry, ManifestError, StatesBounds};
+pub use object_name::ObjectName;
+pub use writer_id::{WriterId, WriterIdError};
 
 /// Types generated from `proto/burgess/storage/v1/manifest.proto`.
 ///

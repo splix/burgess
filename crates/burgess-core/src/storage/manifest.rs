@@ -10,6 +10,7 @@ use crate::wire::UnixMillis;
 use super::day::{Day, DayError};
 use super::frame::{self, FrameError};
 use super::proto;
+use super::writer_id::{WriterId, WriterIdError};
 
 /// Starts every manifest object.
 const MAGIC: [u8; 4] = *b"BGSM";
@@ -38,6 +39,9 @@ pub enum ManifestError {
     /// The day is not in `YYYYMMDD` form.
     #[error(transparent)]
     Day(#[from] DayError),
+    /// The writer id is not a valid one.
+    #[error(transparent)]
+    WriterId(#[from] WriterIdError),
     /// A tree bound is not a 12-byte tree id.
     #[error("tree bound has {found} bytes, expected 12")]
     TreeLength {
@@ -78,7 +82,7 @@ pub struct DayManifest {
     /// The day the files belong to.
     pub day: Day,
     /// The writer that owns the day.
-    pub writer_id: String,
+    pub writer_id: WriterId,
     /// Whether the day is final. A sealed manifest never changes again, so
     /// readers may cache it indefinitely.
     pub sealed: bool,
@@ -130,7 +134,7 @@ pub struct FileStats {
 
 impl DayManifest {
     /// An empty, unsealed manifest, for the first flush of a day.
-    pub fn new(day: Day, writer_id: String) -> Self {
+    pub fn new(day: Day, writer_id: WriterId) -> Self {
         DayManifest {
             day,
             writer_id,
@@ -194,7 +198,7 @@ impl From<&DayManifest> for proto::DayManifest {
         proto::DayManifest {
             format_version: FORMAT_VERSION,
             day: manifest.day.to_string(),
-            writer_id: manifest.writer_id.clone(),
+            writer_id: manifest.writer_id.to_string(),
             sealed: manifest.sealed,
             entries: manifest
                 .entries
@@ -235,7 +239,7 @@ impl TryFrom<proto::DayManifest> for DayManifest {
         }
         Ok(DayManifest {
             day: manifest.day.parse()?,
-            writer_id: manifest.writer_id,
+            writer_id: manifest.writer_id.parse()?,
             sealed: manifest.sealed,
             entries: manifest
                 .entries
@@ -318,7 +322,7 @@ mod tests {
     fn manifest() -> DayManifest {
         DayManifest {
             day: Day::try_from(date(2026, 9, 27)).unwrap(),
-            writer_id: "writer-1".into(),
+            writer_id: "writer-1".parse().unwrap(),
             sealed: false,
             entries: vec![entry(1_790_000_000_000, 41), entry(1_790_000_600_000, 42)],
         }
@@ -379,8 +383,10 @@ mod tests {
 
     #[test]
     fn new_manifest_is_empty_and_open() {
-        let manifest =
-            DayManifest::new(Day::try_from(date(2026, 9, 27)).unwrap(), "writer-1".into());
+        let manifest = DayManifest::new(
+            Day::try_from(date(2026, 9, 27)).unwrap(),
+            "writer-1".parse().unwrap(),
+        );
         assert!(!manifest.sealed);
         assert!(manifest.entries.is_empty());
     }
@@ -481,8 +487,10 @@ mod tests {
                 bytes: 100 * 1024,
             },
         };
-        let mut manifest =
-            DayManifest::new(Day::try_from(date(2026, 9, 27)).unwrap(), "writer-1".into());
+        let mut manifest = DayManifest::new(
+            Day::try_from(date(2026, 9, 27)).unwrap(),
+            "writer-1".parse().unwrap(),
+        );
         let empty = manifest.encode().unwrap().len();
         manifest.entries.push(realistic);
         assert_eq!(manifest.encode().unwrap().len() - empty, 72);
