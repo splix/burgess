@@ -1,0 +1,75 @@
+// The records producers publish to Kafka, one record per message.
+//
+// On the wire every message is the 4-byte marker `SCA1` followed by an
+// encoded `Record`. The marker is not part of this schema: new fields are
+// added here following the usual protobuf evolution rules, and the marker
+// changes only if a message can no longer be read as a `Record` at all.
+syntax = "proto3";
+
+package burgess.wire.v1;
+
+// One observation about one flow.
+message Record {
+  // The flow the record belongs to: tree id (12 bytes) followed by the
+  // subflow (4 bytes), big-endian. Any length other than 16 is invalid.
+  bytes flow_id = 1;
+  // When it happened, in unix milliseconds from the producer clock.
+  uint64 ts_ms = 2;
+  // What kind of observation this is.
+  oneof body {
+    // A snapshot of application state.
+    State state = 10;
+    // The flow started a child flow.
+    Split split = 11;
+    // The flow is linked to an id from another system.
+    Reference reference = 12;
+  }
+}
+
+// A snapshot of application state, the bulk of the data.
+message State {
+  // Service that captured the state.
+  string service = 1;
+  // What part of the service's work the state describes.
+  string category = 2;
+  // Small labels that lookups can filter on by equality.
+  map<string, string> meta = 3;
+  // How to read `payload`.
+  PayloadType payload_type = 4;
+  // The captured state itself.
+  bytes payload = 5;
+}
+
+// How the payload of a state is encoded. An enum rather than free text, so a
+// producer cannot invent a spelling the query service does not know.
+enum PayloadType {
+  // Not set by the producer. Protobuf reads a missing field as this value, so
+  // it cannot double as a real encoding.
+  PAYLOAD_TYPE_UNSPECIFIED = 0;
+  // A JSON document.
+  PAYLOAD_TYPE_JSON = 1;
+}
+
+// The flow in `Record.flow_id` started a child flow in the same tree.
+message Split {
+  // Service that performed the split.
+  string service = 1;
+  // What part of the service's work caused the split.
+  string category = 2;
+  // Subflow of the child. The child's flow id is the parent's tree id
+  // followed by this number.
+  uint32 child_subflow = 3;
+}
+
+// Links the flow to an id known outside Burgess, such as an order number,
+// so an investigator can find the flow from that id.
+message Reference {
+  // What kind of id `domain_id` is, for example "order_id".
+  string ref_type = 1;
+  // The id itself, as the application knows it.
+  string domain_id = 2;
+  // Service that recorded the link.
+  string service = 3;
+  // What part of the service's work recorded the link, if known.
+  optional string category = 4;
+}

@@ -22,8 +22,14 @@ burgess-client = { path = "crates/burgess-client" }
 # Only Timestamp is used, so the time zone database stays out of the
 # producer library that ships inside applications.
 jiff = { version = "0.2", default-features = false, features = ["std"] }
+prost = "0.14"
 rand = "0.10"
 thiserror = "2"
+
+# A protobuf compiler written in Rust, so building Burgess does not require
+# contributors to install `protoc`.
+prost-build = "0.14"
+protox = "0.9"
 
 # Documentation is part of the contract for an open source project, so an
 # undocumented public item fails `cargo clippy -- -D warnings`.

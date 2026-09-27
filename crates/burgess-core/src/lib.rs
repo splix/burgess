@@ -7,3 +7,5 @@
 //! every component sees that change.
 
 pub mod flow;
+
+pub mod wire;
