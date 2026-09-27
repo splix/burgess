@@ -12,32 +12,29 @@ members = [
 [workspace.package]
 version = "0.1.0-dev"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.97"
 
 [workspace.dependencies]
 burgess-core = { path = "crates/burgess-core" }
 burgess-api = { path = "crates/burgess-api" }
 burgess-client = { path = "crates/burgess-client" }
 
-# Only Timestamp is used, so the time zone database stays out of the
-# producer library that ships inside applications.
+arrow-array = "60"
+arrow-schema = "60"
+arrow-select = "60"
+bytes = "1"
+parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 prost = "0.14"
 rand = "0.10"
 thiserror = "2"
 tokio = "1"
 tracing = "0.1"
-# Unicode categories and emoji properties, to decide which characters of an
-# outside id can be typed back into a query.
 unicode-properties = "0.1"
 
-# A protobuf compiler written in Rust, so building Burgess does not require
-# contributors to install `protoc`.
 prost-build = "0.14"
 protox = "0.9"
 
-# Documentation is part of the contract for an open source project, so an
-# undocumented public item fails `cargo clippy -- -D warnings`.
 [workspace.lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"

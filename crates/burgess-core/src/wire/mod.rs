@@ -7,6 +7,7 @@
 
 mod error;
 mod marker;
+mod payload_type;
 mod record;
 mod unix_millis;
 

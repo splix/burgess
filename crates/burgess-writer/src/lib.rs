@@ -8,3 +8,5 @@
 pub mod source;
 
 pub mod batch;
+
+pub mod parquet_files;

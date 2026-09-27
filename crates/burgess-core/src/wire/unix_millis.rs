@@ -18,6 +18,15 @@ impl UnixMillis {
             .ok()
             .and_then(|millis| Timestamp::from_millisecond(millis).ok())
     }
+
+    /// The time as a [`Timestamp`], with a time beyond the latest one a
+    /// timestamp can hold stored as that latest one, the end of year 9999.
+    ///
+    /// For storage: such times are kept rather than rejected, and readers
+    /// that stop at year 9999 can still read the row.
+    pub fn saturating_timestamp(self) -> Timestamp {
+        self.to_timestamp().unwrap_or(Timestamp::MAX)
+    }
 }
 
 /// A time before 1970 becomes the epoch, because unix milliseconds on the wire
@@ -54,6 +63,16 @@ mod tests {
     fn time_before_epoch_is_epoch() {
         let time = Timestamp::from_millisecond(-5).unwrap();
         assert_eq!(u64::from(UnixMillis::from(time)), 0);
+    }
+
+    #[test]
+    fn saturating_timestamp_stops_at_year_9999() {
+        assert_eq!(
+            UnixMillis::from(u64::MAX).saturating_timestamp(),
+            Timestamp::MAX
+        );
+        let time = UnixMillis::from(1_790_000_000_123);
+        assert_eq!(time.saturating_timestamp(), time.to_timestamp().unwrap());
     }
 
     #[test]
