@@ -1,0 +1,9 @@
+[package]
+name = "burgess-core"
+description = "Flow ids, wire format, validation and storage framing shared by every Burgess component."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

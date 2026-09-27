@@ -1,0 +1,9 @@
+[package]
+name = "burgess-api"
+description = "Query request and response types shared by the Burgess query service and its clients."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

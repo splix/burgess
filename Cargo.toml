@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/burgess-core",
+    "crates/burgess-api",
+    "crates/burgess-client",
+    "crates/burgess-writer",
+    "crates/burgess-reader",
+    "crates/burgess-cli",
+]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+burgess-core = { path = "crates/burgess-core" }
+burgess-api = { path = "crates/burgess-api" }
+burgess-client = { path = "crates/burgess-client" }
+
+# Documentation is part of the contract for an open source project, so an
+# undocumented public item fails `cargo clippy -- -D warnings`.
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"

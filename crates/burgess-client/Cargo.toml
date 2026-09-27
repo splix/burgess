@@ -1,0 +1,9 @@
+[package]
+name = "burgess-client"
+description = "Library for applications to publish their state records to Burgess."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

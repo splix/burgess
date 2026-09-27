@@ -1,0 +1,9 @@
+[package]
+name = "burgess-writer"
+description = "Moves Burgess state records from Kafka into Parquet files on object storage."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

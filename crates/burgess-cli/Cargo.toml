@@ -1,0 +1,13 @@
+[package]
+name = "burgess-cli"
+description = "Command line client for the Burgess query service."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "burgess"
+path = "src/main.rs"
+
+[lints]
+workspace = true
