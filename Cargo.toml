@@ -25,6 +25,9 @@ jiff = { version = "0.2", default-features = false, features = ["std"] }
 prost = "0.14"
 rand = "0.10"
 thiserror = "2"
+# Unicode categories and emoji properties, to decide which characters of an
+# outside id can be typed back into a query.
+unicode-properties = "0.1"
 
 # A protobuf compiler written in Rust, so building Burgess does not require
 # contributors to install `protoc`.

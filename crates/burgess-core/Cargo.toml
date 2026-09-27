@@ -10,6 +10,7 @@ jiff.workspace = true
 prost.workspace = true
 rand.workspace = true
 thiserror.workspace = true
+unicode-properties.workspace = true
 
 [build-dependencies]
 prost-build.workspace = true
