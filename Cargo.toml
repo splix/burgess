@@ -19,6 +19,12 @@ burgess-core = { path = "crates/burgess-core" }
 burgess-api = { path = "crates/burgess-api" }
 burgess-client = { path = "crates/burgess-client" }
 
+# Only Timestamp is used, so the time zone database stays out of the
+# producer library that ships inside applications.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
+rand = "0.10"
+thiserror = "2"
+
 # Documentation is part of the contract for an open source project, so an
 # undocumented public item fails `cargo clippy -- -D warnings`.
 [workspace.lints.rust]
