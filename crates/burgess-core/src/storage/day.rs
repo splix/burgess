@@ -37,6 +37,22 @@ pub enum DayError {
 }
 
 impl Day {
+    /// The day before, or `None` before the first day a `Day` can hold.
+    pub fn previous(self) -> Option<Day> {
+        self.0
+            .yesterday()
+            .ok()
+            .and_then(|date| Day::try_from(date).ok())
+    }
+
+    /// The day after, or `None` after the last day a `Day` can hold.
+    pub fn next(self) -> Option<Day> {
+        self.0
+            .tomorrow()
+            .ok()
+            .and_then(|date| Day::try_from(date).ok())
+    }
+
     /// The UTC day of `time`.
     ///
     /// UTC, so the day boundary does not move with the writer host's time
@@ -144,6 +160,14 @@ mod tests {
         let after: Timestamp = "2026-09-28T00:00:00Z".parse().unwrap();
         assert_eq!(Day::utc(before), Ok(day(2026, 9, 27)));
         assert_eq!(Day::utc(after), Ok(day(2026, 9, 28)));
+    }
+
+    #[test]
+    fn neighbours_cross_months_and_stop_at_the_ends() {
+        assert_eq!(day(2026, 9, 30).next(), Some(day(2026, 10, 1)));
+        assert_eq!(day(2026, 10, 1).previous(), Some(day(2026, 9, 30)));
+        assert_eq!(day(9999, 12, 31).next(), None);
+        assert_eq!(day(0, 1, 1).previous(), None);
     }
 
     #[test]

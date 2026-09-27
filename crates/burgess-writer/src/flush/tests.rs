@@ -25,6 +25,9 @@ use crate::batch::{RefRow, SortedBatch, StateEntry, StateRow};
 use crate::parquet_files::{FileWriter, ParquetConfig};
 use crate::source::{PartitionId, Position};
 
+mod restart;
+mod seal;
+
 /// An in-memory store that remembers the order of writes and can fail the
 /// write to one object.
 #[derive(Debug, Default)]
@@ -32,8 +35,9 @@ struct RecordingStore {
     inner: InMemory,
     writes: Mutex<Vec<String>>,
     reads: Mutex<Vec<String>>,
-    /// Writes to a path ending with this fail.
-    fail_writes_to: Mutex<Option<String>>,
+    /// Writes to a path ending with this fail, after letting the given
+    /// number of them through.
+    fail_writes_to: Mutex<Option<(String, usize)>>,
 }
 
 impl RecordingStore {
@@ -46,7 +50,14 @@ impl RecordingStore {
     }
 
     fn fail_writes_to(&self, suffix: Option<&str>) {
-        *self.fail_writes_to.lock().unwrap() = suffix.map(String::from);
+        *self.fail_writes_to.lock().unwrap() = suffix.map(|suffix| (suffix.to_string(), 0));
+    }
+
+    /// Fails writes to paths ending with `suffix` once `skip` of them went
+    /// through: the checkpoint is written twice per flush, and a test may want
+    /// only the second write to fail.
+    fn fail_writes_to_after(&self, suffix: &str, skip: usize) {
+        *self.fail_writes_to.lock().unwrap() = Some((suffix.to_string(), skip));
     }
 }
 
@@ -65,12 +76,16 @@ impl ObjectStore for RecordingStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> object_store::Result<PutResult> {
-        let failing = self.fail_writes_to.lock().unwrap().clone();
-        if failing.is_some_and(|suffix| location.as_ref().ends_with(&suffix)) {
-            return Err(object_store::Error::Generic {
-                store: "RecordingStore",
-                source: "injected failure".into(),
-            });
+        if let Some((suffix, skip)) = self.fail_writes_to.lock().unwrap().as_mut()
+            && location.as_ref().ends_with(suffix.as_str())
+        {
+            if *skip == 0 {
+                return Err(object_store::Error::Generic {
+                    store: "RecordingStore",
+                    source: "injected failure".into(),
+                });
+            }
+            *skip -= 1;
         }
         self.writes.lock().unwrap().push(location.to_string());
         self.inner.put_opts(location, payload, opts).await
@@ -171,7 +186,10 @@ fn writer_id() -> WriterId {
     "writer-1".parse().unwrap()
 }
 
-async fn flusher(store: &Arc<RecordingStore>, clock: &TestClock) -> Flusher<TestClock> {
+async fn open_flusher(
+    store: &Arc<RecordingStore>,
+    clock: &TestClock,
+) -> Result<Flusher<TestClock>, FlushError> {
     Flusher::open(
         Arc::clone(store) as Arc<dyn ObjectStore>,
         FileWriter::new(ParquetConfig::default()).unwrap(),
@@ -179,7 +197,10 @@ async fn flusher(store: &Arc<RecordingStore>, clock: &TestClock) -> Flusher<Test
         writer_id(),
     )
     .await
-    .unwrap()
+}
+
+async fn flusher(store: &Arc<RecordingStore>, clock: &TestClock) -> Flusher<TestClock> {
+    open_flusher(store, clock).await.unwrap()
 }
 
 fn positions(pairs: &[(u32, u64)]) -> BTreeMap<PartitionId, Position> {
@@ -250,6 +271,7 @@ async fn writes_files_manifest_and_checkpoint_in_order() {
         [
             format!("20260927/{FIRST_NNNN}-states.parquet"),
             format!("20260927/{FIRST_NNNN}-refs.parquet"),
+            "_checkpoint/writer-1.json".to_string(),
             "20260927/_manifest".to_string(),
             "_checkpoint/writer-1.json".to_string(),
         ]
@@ -308,6 +330,8 @@ async fn checkpoint_records_seq_positions_and_flush_time() {
         seq: 1,
         positions: positions(&[(0, 10), (1, 4)]),
         last_flush_nnnn: Some(UnixMillis::from(FIRST_NNNN)),
+        pending: None,
+        unsealed: Vec::new(),
     };
     assert_eq!(stored_checkpoint(&store).await, Some(expected.clone()));
     assert_eq!(flusher.checkpoint(), &expected);
@@ -347,7 +371,7 @@ async fn empty_batch_writes_both_files_and_an_entry_without_bounds() {
         .flush(Arc::default())
         .await
         .unwrap();
-    assert_eq!(store.writes().len(), 4);
+    assert_eq!(store.writes().len(), 5);
     assert_eq!(entry.states_bounds, None);
     assert_eq!((entry.states.rows, entry.refs.rows), (0, 0));
     assert!(entry.states.bytes > 0 && entry.refs.bytes > 0);
@@ -403,24 +427,28 @@ async fn failure_before_the_checkpoint_keeps_the_old_offsets() {
     flusher.flush(batch(positions(&[(0, 10)]))).await.unwrap();
     let before = stored_checkpoint(&store).await.unwrap();
 
-    store.fail_writes_to(Some(".json"));
+    // The first checkpoint write, naming the flush as pending, goes through.
+    store.fail_writes_to_after(".json", 1);
     clock.set(SECOND_FLUSH);
     assert!(matches!(
         flusher.flush(batch(positions(&[(0, 20)]))).await,
         Err(FlushError::Store(_))
     ));
-    assert_eq!(stored_checkpoint(&store).await, Some(before.clone()));
+    let stored = stored_checkpoint(&store).await.unwrap();
+    assert_eq!(stored.positions, before.positions);
+    assert_eq!(stored.seq, before.seq);
+    assert!(stored.pending.is_some(), "the flush is named as pending");
     assert_eq!(flusher.checkpoint(), &before);
     assert_eq!(manifest(&store, "20260927").await.unwrap().entries.len(), 2);
 }
 
 #[tokio::test]
 async fn failure_at_the_manifest_or_later_needs_a_restart() {
-    for failing in ["_manifest", ".json"] {
+    for (failing, skip) in [("_manifest", 0), (".json", 1)] {
         let store = Arc::new(RecordingStore::default());
         let clock = TestClock::at(FIRST_FLUSH);
         let mut flusher = flusher(&store, &clock).await;
-        store.fail_writes_to(Some(failing));
+        store.fail_writes_to_after(failing, skip);
         assert!(flusher.flush(batch(positions(&[(0, 10)]))).await.is_err());
 
         store.fail_writes_to(None);
@@ -432,6 +460,24 @@ async fn failure_at_the_manifest_or_later_needs_a_restart() {
             "after failing at {failing}"
         );
     }
+}
+
+#[tokio::test]
+async fn failure_naming_the_flush_pending_leaves_no_manifest_and_can_be_retried() {
+    let store = Arc::new(RecordingStore::default());
+    let clock = TestClock::at(FIRST_FLUSH);
+    let mut flusher = flusher(&store, &clock).await;
+    store.fail_writes_to(Some(".json"));
+    assert!(matches!(
+        flusher.flush(batch(positions(&[(0, 10)]))).await,
+        Err(FlushError::Store(_))
+    ));
+    assert_eq!(manifest(&store, "20260927").await, None);
+
+    store.fail_writes_to(None);
+    clock.set(SECOND_FLUSH);
+    let entry = flusher.flush(batch(positions(&[(0, 10)]))).await.unwrap();
+    assert_eq!(entry.seq, 1);
 }
 
 #[tokio::test]
@@ -461,13 +507,7 @@ async fn unreadable_checkpoint_is_an_error_not_a_fresh_start() {
         )
         .await
         .unwrap();
-    let opened = Flusher::open(
-        Arc::clone(&store) as Arc<dyn ObjectStore>,
-        FileWriter::new(ParquetConfig::default()).unwrap(),
-        TestClock::at(FIRST_FLUSH),
-        writer_id(),
-    )
-    .await;
+    let opened = open_flusher(&store, &TestClock::at(FIRST_FLUSH)).await;
     assert!(matches!(opened, Err(FlushError::Checkpoint(_))));
 }
 
@@ -536,8 +576,7 @@ async fn clock_going_back_across_midnight_stays_on_the_current_day() {
 #[tokio::test]
 async fn refuses_a_clock_before_1970() {
     let store = Arc::new(RecordingStore::default());
-    let clock = TestClock::at("1969-12-31T23:59:59Z");
-    let mut flusher = flusher(&store, &clock).await;
+    let mut flusher = flusher(&store, &TestClock::at("1969-12-31T23:59:59Z")).await;
     assert!(matches!(
         flusher.flush(batch(positions(&[(0, 1)]))).await,
         Err(FlushError::ClockBeforeEpoch { .. })
@@ -570,21 +609,22 @@ async fn refuses_a_manifest_of_another_writer() {
 }
 
 #[tokio::test]
-async fn reads_the_day_manifest_once_per_day() {
+async fn flushes_within_a_day_read_nothing() {
     let store = Arc::new(RecordingStore::default());
     let clock = TestClock::at(FIRST_FLUSH);
     let mut flusher = flusher(&store, &clock).await;
-    for (minute, position) in [(0, 1), (10, 2), (20, 3)] {
+    flusher.flush(batch(positions(&[(0, 1)]))).await.unwrap();
+    let reads_after_first = store.reads().len();
+    for (minute, position) in [(10, 2), (20, 3), (30, 4)] {
         clock.set(&format!("2026-09-27T10:{minute:02}:00Z"));
         flusher
             .flush(batch(positions(&[(0, position)])))
             .await
             .unwrap();
     }
-    let manifest_reads = store
-        .reads()
-        .iter()
-        .filter(|path| path.ends_with("_manifest"))
-        .count();
-    assert_eq!(manifest_reads, 1);
+    assert_eq!(
+        store.reads().len(),
+        reads_after_first,
+        "later flushes read nothing"
+    );
 }

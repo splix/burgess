@@ -46,11 +46,20 @@ pub enum FlushError {
         /// The writer the manifest belongs to.
         owner: WriterId,
     },
+    /// A sealed day lists flushes the checkpoint does not cover. Sealing waits
+    /// for the checkpoint, so the checkpoint or the manifest is not the one
+    /// this writer wrote; the sealed manifest is left untouched.
+    #[error("day {day} is sealed but lists flushes the checkpoint does not cover")]
+    SealedManifestAhead {
+        /// The sealed day.
+        day: Day,
+    },
     /// An earlier flush failed after its manifest write started, so storage
     /// may list a flush the checkpoint does not know about. Flushing again
-    /// could store the same records twice.
+    /// could store the same records twice; opening the flusher again first
+    /// drops that flush.
     #[error(
-        "an earlier flush failed after writing its manifest; the manifest may list a flush the checkpoint does not know about"
+        "an earlier flush failed after writing its manifest; open the flusher again to drop the flush the checkpoint does not cover"
     )]
     NeedsRestart,
 }
