@@ -15,9 +15,11 @@ arrow-array.workspace = true
 arrow-schema.workspace = true
 burgess-core.workspace = true
 bytes.workspace = true
+futures.workspace = true
 jiff.workspace = true
 object_store.workspace = true
 parquet.workspace = true
+rdkafka.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -27,7 +29,7 @@ tracing.workspace = true
 [dev-dependencies]
 arrow-select.workspace = true
 async-trait.workspace = true
-futures.workspace = true
+testcontainers-modules.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }
 
 [lints]

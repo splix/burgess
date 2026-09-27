@@ -1,18 +1,20 @@
 //! Where the writer reads records from.
 //!
 //! The writer depends on a partitioned log with opaque positions rather than
-//! on Kafka directly. Kafka is the only production source today, but tests run
+//! on Kafka directly. Kafka ([`KafkaLog`]) is the only production source today, but tests run
 //! against an in-memory log (`MemoryLog`, behind the `test-util` feature for
 //! other crates), and a later internal buffer is meant to slot in behind the
 //! same interface.
 
 mod entry;
+mod kafka;
 #[cfg(any(test, feature = "test-util"))]
 mod memory;
 mod position;
 mod resume_error;
 
 pub use entry::LogEntry;
+pub use kafka::{KafkaConfig, KafkaLog, KafkaLogError};
 #[cfg(any(test, feature = "test-util"))]
 pub use memory::{MemoryLog, MemoryLogError, MemoryLogReader};
 pub use position::{PartitionId, Position, Start};
@@ -39,7 +41,10 @@ pub trait PartitionedLog {
     /// earlier assignment; partitions not listed are not read.
     ///
     /// Fails for a partition the log does not have, and for a position the log
-    /// cannot resume from, rather than silently starting somewhere else.
+    /// never handed out, rather than silently starting somewhere else. A
+    /// position older than anything the log still holds is different: those
+    /// entries are gone for good, so a log may resume at its oldest entry, as
+    /// long as it reports the loss.
     fn assign(
         &mut self,
         starts: BTreeMap<PartitionId, Start>,

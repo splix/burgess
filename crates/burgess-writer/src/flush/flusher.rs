@@ -201,7 +201,10 @@ impl<C: Clock> Flusher<C> {
         let files = Arc::clone(&self.files);
         match tokio::task::spawn_blocking(move || files.write_batch(&batch)).await {
             Ok(encoded) => Ok(encoded?),
-            Err(failed) => std::panic::resume_unwind(failed.into_panic()),
+            Err(failed) => match failed.try_into_panic() {
+                Ok(panic) => std::panic::resume_unwind(panic),
+                Err(_) => Err(FlushError::Cancelled),
+            },
         }
     }
 

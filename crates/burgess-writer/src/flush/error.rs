@@ -54,6 +54,10 @@ pub enum FlushError {
         /// The sealed day.
         day: Day,
     },
+    /// Encoding was cancelled, because the runtime is shutting down. Nothing
+    /// was written yet.
+    #[error("flush cancelled while encoding")]
+    Cancelled,
     /// An earlier flush failed after its manifest write started, so storage
     /// may list a flush the checkpoint does not know about. Flushing again
     /// could store the same records twice; opening the flusher again first

@@ -31,8 +31,10 @@ bytes = "1"
 parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 prost = "0.14"
+rdkafka = { version = "0.39", features = ["zstd"] }
 rand = "0.10"
 thiserror = "2"
+testcontainers-modules = { version = "0.15", features = ["kafka"] }
 tokio = "1"
 tracing = "0.1"
 unicode-properties = "0.1"
