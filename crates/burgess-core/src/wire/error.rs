@@ -7,18 +7,18 @@
 /// traffic that was never meant for Burgess.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DecodeError {
-    /// The message does not start with the `SCA` magic, or is too short to
+    /// The message does not start with the `BGS` magic, or is too short to
     /// hold the full marker.
-    #[error("unknown marker \"{}\", expected \"SCA1\"", found.escape_ascii())]
+    #[error("unknown marker \"{}\", expected \"BGS1\"", found.escape_ascii())]
     UnknownMarker {
         /// Up to the first four bytes of the message.
         found: Vec<u8>,
     },
-    /// The message starts with `SCA` but the version byte after it is not one
+    /// The message starts with `BGS` but the version byte after it is not one
     /// this build can read, most likely a message from a newer producer.
     #[error("unknown framing version \"{}\", expected \"1\"", version.escape_ascii())]
     UnknownFramingVersion {
-        /// The byte after `SCA`.
+        /// The byte after `BGS`.
         version: u8,
     },
     /// The bytes after the marker are not a protobuf `Record`.

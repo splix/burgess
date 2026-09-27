@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn message_starts_with_marker() {
-        assert_eq!(record(state()).encode()[..4], *b"SCA1");
+        assert_eq!(record(state()).encode()[..4], *b"BGS1");
     }
 
     #[test]

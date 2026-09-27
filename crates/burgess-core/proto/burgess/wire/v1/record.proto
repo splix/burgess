@@ -1,6 +1,6 @@
 // The records producers publish to Kafka, one record per message.
 //
-// On the wire every message is the 4-byte marker `SCA1` followed by an
+// On the wire every message is the 4-byte marker `BGS1` followed by an
 // encoded `Record`. The marker is not part of this schema: new fields are
 // added here following the usual protobuf evolution rules, and the marker
 // changes only if a message can no longer be read as a `Record` at all.

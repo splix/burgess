@@ -1,0 +1,56 @@
+// The objects the writer keeps next to the data files on the object store.
+//
+// Each object is framed as a 4-byte magic, a big-endian u32 length and one
+// of these messages, optionally followed by raw bytes. The format version is
+// a field of the message, so the magic only tells what kind of object it is.
+syntax = "proto3";
+
+package burgess.storage.v1;
+
+// The list of data files of one day, stored as `YYYYMMDD/_manifest` with the
+// magic `BGSM`. A data file not listed here does not exist for readers.
+message DayManifest {
+  // Version of this message's meaning, so a reader can refuse a newer one.
+  uint32 format_version = 1;
+  // The day, "YYYYMMDD" by the writer clock.
+  string day = 2;
+  // The writer that owns the day.
+  string writer_id = 3;
+  // Set once the day will never change again, so readers may cache it for
+  // good.
+  bool sealed = 4;
+  // One entry per flush, in flush order.
+  repeated FlushEntry entries = 5;
+}
+
+// One flush: a states file and a refs file written together.
+message FlushEntry {
+  // Flush time in unix milliseconds by the writer clock; also names the
+  // files `NNNN-states.parquet` and `NNNN-refs.parquet`.
+  uint64 nnnn = 1;
+  // The writer's batch counter, one more at every flush.
+  uint64 seq = 2;
+  // Bounds of the states file's rows; absent when it has no rows.
+  StatesBounds states_bounds = 3;
+  // Rows in the states file.
+  uint64 states_rows = 4;
+  // Rows in the refs file.
+  uint64 refs_rows = 5;
+  // Size of the states file in bytes.
+  uint64 states_bytes = 6;
+  // Size of the refs file in bytes.
+  uint64 refs_bytes = 7;
+}
+
+// Smallest and largest values in a states file, which let a lookup skip the
+// file without opening it.
+message StatesBounds {
+  // Smallest tree id, 12 bytes.
+  bytes min_tree = 1;
+  // Largest tree id, 12 bytes.
+  bytes max_tree = 2;
+  // Earliest producer time, unix milliseconds.
+  uint64 min_ts = 3;
+  // Latest producer time, unix milliseconds.
+  uint64 max_ts = 4;
+}
