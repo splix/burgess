@@ -6,3 +6,5 @@
 //! without listing the bucket.
 
 pub mod source;
+
+pub mod batch;
