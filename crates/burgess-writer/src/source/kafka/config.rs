@@ -57,6 +57,12 @@ impl KafkaConfig {
         }
     }
 
+    /// Checks the settings without connecting, so an invalid property stops
+    /// the writer at start rather than when it connects.
+    pub(crate) fn check(&self) -> Result<(), KafkaLogError> {
+        self.client_config().map(|_| ())
+    }
+
     pub(super) fn client_config(&self) -> Result<ClientConfig, KafkaLogError> {
         let mut config = ClientConfig::new();
         for (key, value) in &self.properties {

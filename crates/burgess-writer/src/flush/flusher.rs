@@ -111,8 +111,11 @@ impl<C: Clock> Flusher<C> {
 
         self.put_checkpoint(&pending).await?;
         self.needs_restart = true;
-        self.put(&ObjectName::Manifest { day }, encoded).await?;
-        self.put_checkpoint(&checkpoint).await?;
+        let unfinished = |cause| FlushError::Unfinished(Box::new(cause));
+        self.put(&ObjectName::Manifest { day }, encoded)
+            .await
+            .map_err(unfinished)?;
+        self.put_checkpoint(&checkpoint).await.map_err(unfinished)?;
         self.checkpoint = checkpoint;
         self.manifest = Some(manifest);
         self.needs_restart = false;

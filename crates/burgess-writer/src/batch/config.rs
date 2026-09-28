@@ -30,7 +30,7 @@ pub enum BatchConfigError {
 }
 
 impl BatchConfig {
-    pub(super) fn check(&self) -> Result<(), BatchConfigError> {
+    pub(crate) fn check(&self) -> Result<(), BatchConfigError> {
         if self.max_interval.is_zero() {
             return Err(BatchConfigError::ZeroInterval);
         }

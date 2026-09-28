@@ -2,6 +2,9 @@
 
 use std::num::NonZeroUsize;
 
+use parquet::basic::{Compression, ZstdLevel};
+use parquet::errors::ParquetError;
+
 /// How the Parquet files are encoded.
 ///
 /// Sizes decide how finely a lookup can skip data: smaller pages mean less
@@ -15,6 +18,13 @@ pub struct ParquetConfig {
     pub max_row_group_rows: NonZeroUsize,
     /// Size a data page is closed at, in bytes before compression.
     pub data_page_bytes: NonZeroUsize,
+}
+
+impl ParquetConfig {
+    /// The compression to write with, or why the level is invalid.
+    pub(crate) fn compression(&self) -> Result<Compression, ParquetError> {
+        Ok(Compression::ZSTD(ZstdLevel::try_new(self.zstd_level)?))
+    }
 }
 
 impl Default for ParquetConfig {

@@ -18,10 +18,10 @@ impl Validate for State {
                 });
             }
         }
-        if self.payload.len() > limits.max_payload_bytes {
+        if self.payload.len() > limits.max_payload_bytes.get() {
             return Err(ValidationError::PayloadTooLarge {
                 found: self.payload.len(),
-                max: limits.max_payload_bytes,
+                max: limits.max_payload_bytes.get(),
             });
         }
         Ok(())
@@ -31,11 +31,12 @@ impl Validate for State {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::num::NonZeroUsize;
 
     use super::*;
 
     const SMALL: Limits = Limits {
-        max_payload_bytes: 10,
+        max_payload_bytes: NonZeroUsize::new(10).unwrap(),
     };
 
     fn state(payload_bytes: usize) -> State {

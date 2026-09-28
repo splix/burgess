@@ -1,7 +1,6 @@
 //! Encoding a batch into its two Parquet files.
 
 use arrow_schema::ArrowError;
-use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 
 use super::config::ParquetConfig;
@@ -51,7 +50,7 @@ impl FileWriter {
     /// Prepares both file layouts, so invalid settings fail at startup rather
     /// than at the first flush.
     pub fn new(config: ParquetConfig) -> Result<Self, FileError> {
-        let compression = Compression::ZSTD(ZstdLevel::try_new(config.zstd_level)?);
+        let compression = config.compression()?;
         Ok(FileWriter {
             states: FileLayout::new(&config, compression)?,
             refs: FileLayout::new(&config, compression)?,

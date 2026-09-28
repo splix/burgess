@@ -66,6 +66,11 @@ impl Batch {
         }
     }
 
+    /// Whether nothing was read into the batch, not even a skipped message.
+    pub(super) fn is_empty(&self) -> bool {
+        self.positions.is_empty()
+    }
+
     /// Bytes of the messages kept so far.
     pub(super) fn bytes(&self) -> usize {
         self.bytes

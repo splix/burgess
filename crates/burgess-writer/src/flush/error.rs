@@ -58,6 +58,12 @@ pub enum FlushError {
     /// was written yet.
     #[error("flush cancelled while encoding")]
     Cancelled,
+    /// This flush failed once its manifest write had started, so storage may
+    /// list it while the checkpoint does not; the cause says why. Retrying
+    /// could store its records twice, so the flusher refuses further flushes
+    /// until it is opened again.
+    #[error("flush failed after starting its manifest write; open the flusher again to recover")]
+    Unfinished(#[source] Box<FlushError>),
     /// An earlier flush failed after its manifest write started, so storage
     /// may list a flush the checkpoint does not know about. Flushing again
     /// could store the same records twice; opening the flusher again first

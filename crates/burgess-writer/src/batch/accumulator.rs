@@ -88,6 +88,23 @@ impl<L: PartitionedLog> Accumulator<L> {
         false
     }
 
+    /// Closes the open batch now instead of at its deadline, for shutdown.
+    /// Entries already pulled but not yet added join it while it has room,
+    /// so they are stored rather than read again after the restart; the rest
+    /// are left out, not checkpointed, and read again.
+    ///
+    /// `None` when nothing was read since the last batch: flushing an empty
+    /// batch on the way out would only add a flush that stores nothing.
+    pub fn finish(&mut self) -> Option<SortedBatch> {
+        let mut batch = self.open.take().map(|open| open.batch).unwrap_or_default();
+        while batch.bytes() < self.config.max_bytes.get()
+            && let Some(entry) = self.carried_over.pop_front()
+        {
+            batch.add(entry, &self.limits);
+        }
+        (!batch.is_empty()).then(|| batch.into_sorted())
+    }
+
     fn close(&mut self) -> SortedBatch {
         self.open
             .take()
@@ -310,5 +327,37 @@ mod tests {
             Limits::default(),
         );
         assert_eq!(created.err(), Some(BatchConfigError::ZeroInterval));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn finish_hands_out_what_was_read_so_far() {
+        let log = log_with(3);
+        let mut accumulator = accumulator(&log, usize::MAX).await;
+        let cut_short = tokio::time::timeout(INTERVAL / 2, accumulator.next_batch()).await;
+        assert!(cut_short.is_err());
+        let batch = accumulator.finish().unwrap();
+        assert_eq!(services(&batch), ["s0", "s1", "s2"]);
+        assert_eq!(batch.positions[&PartitionId::from(0)], Position::from(3));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn finish_takes_carried_over_entries_up_to_the_size_bound() {
+        let log = log_with(5);
+        let two_messages = 2 * message(0).len();
+        let mut accumulator = accumulator(&log, two_messages).await;
+        accumulator.next_batch().await.unwrap();
+        let rest = accumulator.finish().unwrap();
+        assert_eq!(services(&rest), ["s2", "s3"]);
+        assert_eq!(rest.positions[&PartitionId::from(0)], Position::from(4));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn finish_without_anything_read_gives_nothing() {
+        let log = MemoryLog::new(1);
+        let mut accumulator = accumulator(&log, usize::MAX).await;
+        assert_eq!(accumulator.finish(), None);
+        let cut_short = tokio::time::timeout(INTERVAL / 2, accumulator.next_batch()).await;
+        assert!(cut_short.is_err());
+        assert_eq!(accumulator.finish(), None);
     }
 }
