@@ -5,12 +5,14 @@
 //! message it cannot read is skipped, not fatal, and [`DecodeError`] names the
 //! reason so the skip can be logged and counted.
 
+mod dump;
 mod error;
 mod marker;
 mod payload_type;
 mod record;
 mod unix_millis;
 
+pub use dump::{DumpReader, DumpWriter};
 pub use error::DecodeError;
 pub use marker::MARKER;
 pub use record::Record;

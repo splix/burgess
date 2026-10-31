@@ -412,6 +412,7 @@ dependencies = [
  "rdkafka",
  "serde",
  "serde_json",
+ "tempfile",
  "testcontainers-modules",
  "thiserror",
  "tokio",

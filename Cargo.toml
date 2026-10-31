@@ -37,6 +37,7 @@ prost = "0.14"
 rdkafka = { version = "0.39", features = ["zstd"] }
 rand = "0.10"
 thiserror = "2"
+tempfile = "3"
 testcontainers-modules = { version = "0.15", features = ["kafka"] }
 tokio = "1"
 tracing = "0.1"
