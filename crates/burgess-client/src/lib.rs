@@ -7,9 +7,10 @@
 //! to fail.
 //!
 //! An [`Emitter`] turns calls into records and hands them to a [`Sink`], which
-//! delivers them. Keeping delivery behind a trait lets the same instrumentation
-//! publish to Kafka in production and to a [`MemorySink`] in the
-//! application's own tests.
+//! delivers them. The emitter does that work on a thread of its own, so the
+//! application's threads only queue records and never wait. Keeping delivery
+//! behind a trait lets the same instrumentation publish to Kafka in
+//! production and to a [`MemorySink`] in the application's own tests.
 
 mod clock;
 mod dropped;
@@ -18,11 +19,14 @@ mod emitter;
 mod kafka;
 mod memory_sink;
 mod message;
+mod pending;
+mod queue;
 mod sink;
 mod throttle;
+mod worker;
 
 pub use clock::{Clock, SystemClock};
-pub use emitter::Emitter;
+pub use emitter::{Emitter, EmitterBuilder};
 #[cfg(feature = "kafka")]
 pub use kafka::{Compression, KafkaConfig, KafkaSink, KafkaSinkError};
 pub use memory_sink::MemorySink;

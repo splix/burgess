@@ -35,7 +35,7 @@ struct Consumed {
     record: Record,
 }
 
-fn emitter(servers: &str, topic: &str, compression: Compression) -> Emitter<KafkaSink> {
+fn emitter(servers: &str, topic: &str, compression: Compression) -> Emitter {
     let mut config = KafkaConfig::new(servers, topic);
     config.compression = compression;
     Emitter::new("checkout", KafkaSink::new(&config).unwrap())
@@ -46,7 +46,7 @@ fn send_and_flush_return_while_kafka_is_down() {
     let emitter = emitter("127.0.0.1:1", "records", Compression::default());
     let started = Instant::now();
     let root = emitter.start();
-    emitter.capture(root, "payment", &json!({"amount": 42}));
+    emitter.capture(root, "payment", json!({"amount": 42}));
     emitter.flush(Duration::from_millis(200));
     assert!(
         started.elapsed() < Duration::from_secs(2),
@@ -161,7 +161,7 @@ async fn delivers_every_record_keyed_by_its_tree(servers: &str) {
     let emitter = emitter(servers, &topic, Compression::default());
     let root = emitter.start();
     let child = emitter.split(root, "fan-out");
-    emitter.capture(child, "payment", &json!({"amount": 42}));
+    emitter.capture(child, "payment", json!({"amount": 42}));
     emitter.reference(root, "order_id", "ORD-1");
     emitter.flush(PATIENCE);
 
@@ -187,7 +187,7 @@ async fn puts_each_tree_in_its_own_partition(servers: &str) {
     for _ in 0..TREES {
         let root = emitter.start();
         let child = emitter.split(root, "fan-out");
-        emitter.capture(child, "payment", &json!({}));
+        emitter.capture(child, "payment", json!({}));
     }
     emitter.flush(PATIENCE);
 
@@ -215,7 +215,7 @@ async fn every_compression_reaches_the_reader(servers: &str) {
         emitter.capture(
             root,
             "payment",
-            &json!({"codec": format!("{compression:?}")}),
+            json!({"codec": format!("{compression:?}")}),
         );
         emitter.flush(PATIENCE);
 

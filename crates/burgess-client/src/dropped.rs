@@ -4,7 +4,6 @@ use std::fmt;
 
 use burgess_core::flow::FlowId;
 use burgess_core::validation::ValidationError;
-use burgess_core::wire::{Body, Record};
 
 use crate::throttle::Verdict;
 
@@ -27,16 +26,6 @@ pub(crate) enum RecordKind {
     Reference,
 }
 
-impl From<&Body> for RecordKind {
-    fn from(body: &Body) -> Self {
-        match body {
-            Body::State(_) => RecordKind::State,
-            Body::Split(_) => RecordKind::Split,
-            Body::Reference(_) => RecordKind::Reference,
-        }
-    }
-}
-
 impl fmt::Display for RecordKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -55,34 +44,16 @@ pub(crate) struct DroppedRecord<'a> {
     pub category: Option<&'a str>,
     pub kind: RecordKind,
     pub flow: FlowId,
-    pub reason: DropReason,
 }
 
-impl<'a> DroppedRecord<'a> {
-    /// Describes a record that was built but must not be sent.
-    pub fn of(service: &'a str, record: &'a Record, reason: DropReason) -> Self {
-        let category = match &record.body {
-            Body::State(state) => Some(state.category.as_str()),
-            Body::Split(split) => Some(split.category.as_str()),
-            Body::Reference(reference) => reference.category.as_deref(),
-        };
-        DroppedRecord {
-            service,
-            category,
-            kind: RecordKind::from(&record.body),
-            flow: record.flow_id,
-            reason,
-        }
-    }
-
+impl DroppedRecord<'_> {
     /// Logs the drop, as a warning or quietly as the throttle decided.
-    pub fn log(&self, verdict: Verdict) {
+    pub fn log(&self, reason: &DropReason, verdict: Verdict) {
         let DroppedRecord {
             service,
             category,
             kind,
             flow,
-            reason,
         } = self;
         match verdict {
             Verdict::Warn { suppressed } => tracing::warn!(

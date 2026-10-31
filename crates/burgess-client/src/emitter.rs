@@ -1,68 +1,64 @@
 //! The calls an application makes to capture its state.
 
-use std::time::Duration;
+mod builder;
+
+use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use burgess_core::flow::FlowId;
-use burgess_core::validation::{Limits, Validate};
-use burgess_core::wire::{Body, PayloadType, Record, Reference, Split, State};
 use serde::Serialize;
 
-use crate::clock::{Clock, SystemClock};
-use crate::dropped::{DroppedRecord, RecordKind};
+pub use builder::EmitterBuilder;
+
+use crate::clock::Clock;
+use crate::pending::{Item, Pending, PendingBody};
+use crate::queue::Queue;
 use crate::sink::Sink;
-use crate::throttle::Throttle;
 
 /// Mints flow ids and emits one service's records about them to a [`Sink`].
 ///
+/// Applications call it from latency-sensitive code, so a call does only
+/// what must happen right away: it reads the clock, mints ids, and queues
+/// the record without waiting. A background thread writes the payload as
+/// JSON, validates, encodes and sends. When that thread falls behind, the
+/// queue fills and further records are dropped rather than slowing the
+/// caller.
+///
 /// None of the calls can fail. A record that cannot be built, or that the
-/// writer would skip anyway, is dropped here and logged in the application's
-/// own logs, where its developers will see it, instead of travelling to Kafka
-/// only to be thrown away.
-#[derive(Debug)]
-pub struct Emitter<S, C = SystemClock> {
-    service: String,
-    sink: S,
-    clock: C,
-    limits: Limits,
-    drop_throttle: Throttle,
+/// writer would skip anyway, is dropped by the background thread and logged
+/// in the application's own logs, where its developers will see it, instead
+/// of travelling to Kafka only to be thrown away.
+///
+/// Dropping the emitter hands what is still queued to the sink, for up to
+/// five seconds, and stops the background thread. Call [`Emitter::flush`]
+/// first for the sink to deliver it too.
+pub struct Emitter {
+    queue: Arc<Queue>,
+    clock: Arc<dyn Clock>,
+    /// Shared with the worker, so that [`Emitter::flush`] can wait on the
+    /// sink itself while the worker keeps draining the queue.
+    sink: Arc<dyn Sink>,
+    /// `None` when the thread could not be started; records are then queued
+    /// until the queue is full, and dropped after.
+    worker: Option<JoinHandle<()>>,
 }
 
-impl<S: Sink> Emitter<S> {
-    /// An emitter for `service`, on the host's clock, checking records
-    /// against the default [`Limits`].
+impl Emitter {
+    /// An emitter for `service` with the default settings; see
+    /// [`EmitterBuilder`] for the others.
     ///
     /// Created once when the service starts: every record it emits names
     /// `service`. A process hosting several services creates one emitter for
     /// each, and they can share a sink.
-    pub fn new(service: impl Into<String>, sink: S) -> Self {
-        Emitter {
-            service: service.into(),
-            sink,
-            clock: SystemClock,
-            limits: Limits::default(),
-            drop_throttle: Throttle::default(),
-        }
-    }
-}
-
-impl<S: Sink, C: Clock> Emitter<S, C> {
-    /// Uses `clock` to stamp records and to mint root flows.
-    pub fn with_clock<D: Clock>(self, clock: D) -> Emitter<S, D> {
-        Emitter {
-            service: self.service,
-            sink: self.sink,
-            clock,
-            limits: self.limits,
-            drop_throttle: self.drop_throttle,
-        }
+    pub fn new(service: impl Into<String>, sink: impl Sink + 'static) -> Self {
+        Self::builder(service).start(sink)
     }
 
-    /// Checks records against `limits` before sending them.
-    ///
-    /// Set them to what the writer is configured with, so that a record is
-    /// dropped here exactly when the writer would skip it.
-    pub fn with_limits(self, limits: Limits) -> Self {
-        Emitter { limits, ..self }
+    /// Settings for an emitter for `service`, starting from the defaults.
+    pub fn builder(service: impl Into<String>) -> EmitterBuilder {
+        EmitterBuilder::new(service.into())
     }
 
     /// Starts a new tree and returns its root flow.
@@ -77,61 +73,57 @@ impl<S: Sink, C: Clock> Emitter<S, C> {
     ///
     /// Done in one call so the child can never exist without the split that
     /// links it to its parent; without it, a walk down the tree would not
-    /// find the child. The child is returned even if the split was dropped,
+    /// find the child. The child is returned even if the split is dropped,
     /// because the application must carry on either way.
-    pub fn split(&self, parent: FlowId, category: &str) -> FlowId {
+    pub fn split(&self, parent: FlowId, category: &'static str) -> FlowId {
         let child = parent.new_child();
-        self.emit(
+        self.enqueue(
             parent,
-            Body::Split(Split {
-                service: self.service.clone(),
-                category: category.into(),
-                child_subflow: child.subflow().into(),
-            }),
+            PendingBody::Split {
+                category,
+                child: child.subflow(),
+            },
         );
         child
     }
 
     /// Records a snapshot of application state, with `payload` stored as
     /// JSON.
-    pub fn capture<P: Serialize + ?Sized>(&self, flow: FlowId, category: &str, payload: &P) {
+    ///
+    /// The payload is moved rather than borrowed, because it is written as
+    /// JSON later, on the background thread. Wrap large state in an [`Arc`]
+    /// to share it instead of copying it.
+    pub fn capture(
+        &self,
+        flow: FlowId,
+        category: &'static str,
+        payload: impl Serialize + Send + 'static,
+    ) {
         self.capture_with_meta(flow, category, &[], payload);
     }
 
     /// Like [`Self::capture`], with `meta` as labels that lookups can filter
     /// on by equality. A key given twice keeps its last value.
-    pub fn capture_with_meta<P: Serialize + ?Sized>(
+    ///
+    /// The labels are copied on the caller's thread, which is why they have
+    /// a call of their own: most captures have none.
+    pub fn capture_with_meta(
         &self,
         flow: FlowId,
-        category: &str,
+        category: &'static str,
         meta: &[(&str, &str)],
-        payload: &P,
+        payload: impl Serialize + Send + 'static,
     ) {
-        let payload = match serde_json::to_vec(payload) {
-            Ok(payload) => payload,
-            Err(error) => {
-                self.log_drop(&DroppedRecord {
-                    service: &self.service,
-                    category: Some(category),
-                    kind: RecordKind::State,
-                    flow,
-                    reason: error.into(),
-                });
-                return;
-            }
-        };
-        self.emit(
+        self.enqueue(
             flow,
-            Body::State(State {
-                service: self.service.clone(),
-                category: category.into(),
+            PendingBody::State {
+                category,
                 meta: meta
                     .iter()
                     .map(|(key, value)| (key.to_string(), value.to_string()))
                     .collect(),
-                payload_type: PayloadType::Json.into(),
-                payload,
-            }),
+                payload: Box::new(payload),
+            },
         );
     }
 
@@ -140,41 +132,72 @@ impl<S: Sink, C: Clock> Emitter<S, C> {
     ///
     /// Takes no category: what is linked is the flow itself, not a part of
     /// the service's work.
-    pub fn reference(&self, flow: FlowId, ref_type: &str, domain_id: &str) {
-        self.emit(
+    pub fn reference(&self, flow: FlowId, ref_type: &'static str, domain_id: impl Into<String>) {
+        self.enqueue(
             flow,
-            Body::Reference(Reference {
-                ref_type: ref_type.into(),
+            PendingBody::Reference {
+                ref_type,
                 domain_id: domain_id.into(),
-                service: self.service.clone(),
-                category: None,
-            }),
+            },
         );
     }
 
-    /// Waits up to `timeout` for the records emitted so far to be delivered.
+    /// Waits up to `timeout` for the records emitted so far to reach the
+    /// sink and be delivered by it.
     ///
-    /// Call it when the service shuts down: records the sink still buffers
-    /// when it is dropped are lost. See [`Sink::flush`].
+    /// The one call that waits. Make it when the service shuts down: records
+    /// the sink still buffers when it is dropped are lost. See
+    /// [`Sink::flush`].
     pub fn flush(&self, timeout: Duration) {
-        self.sink.flush(timeout);
-    }
-
-    fn emit(&self, flow: FlowId, body: Body) {
-        let mut record = Record {
-            flow_id: flow,
-            time: self.clock.now().into(),
-            body,
-        };
-        if let Err(error) = record.validate(&self.limits) {
-            self.log_drop(&DroppedRecord::of(&self.service, &record, error.into()));
+        if self.worker.is_none() {
+            // Nothing would ever take the marker.
             return;
         }
-        self.sink.send(record.into());
+        let deadline = Instant::now() + timeout;
+        let (done, reached) = mpsc::sync_channel(1);
+        let mut marker = Item::Flush { done };
+        // A full queue has no room for the marker yet; the worker is
+        // draining it, so wait for room.
+        while let Err(rejected) = self.queue.push(marker) {
+            if Instant::now() >= deadline {
+                return;
+            }
+            marker = rejected;
+            self.wake_worker();
+            thread::sleep(Duration::from_millis(1));
+        }
+        self.wake_worker();
+        let remaining = || deadline.saturating_duration_since(Instant::now());
+        if reached.recv_timeout(remaining()).is_ok() {
+            self.sink.flush(remaining());
+        }
     }
 
-    fn log_drop(&self, dropped: &DroppedRecord) {
-        dropped.log(self.drop_throttle.admit(self.clock.now()));
+    fn enqueue(&self, flow: FlowId, body: PendingBody) {
+        self.queue.push_record(Pending {
+            flow,
+            time: self.clock.now().into(),
+            body,
+        });
+    }
+
+    /// Spares the worker the rest of its sleep. Never called on the paths
+    /// that emit records, since waking a thread is a system call.
+    fn wake_worker(&self) {
+        if let Some(worker) = &self.worker {
+            worker.thread().unpark();
+        }
+    }
+}
+
+impl Drop for Emitter {
+    fn drop(&mut self) {
+        self.queue.stop();
+        if let Some(worker) = self.worker.take() {
+            worker.thread().unpark();
+            // A worker that panicked has nothing left to deliver.
+            let _ = worker.join();
+        }
     }
 }
 
