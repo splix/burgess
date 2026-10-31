@@ -6,6 +6,8 @@ use burgess_core::flow::FlowId;
 use burgess_core::validation::ValidationError;
 use burgess_core::wire::{Body, Record};
 
+use crate::throttle::Verdict;
+
 /// Why a record was not sent.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum DropReason {
@@ -70,6 +72,34 @@ impl<'a> DroppedRecord<'a> {
             kind: RecordKind::from(&record.body),
             flow: record.flow_id,
             reason,
+        }
+    }
+
+    /// Logs the drop, as a warning or quietly as the throttle decided.
+    pub fn log(&self, verdict: Verdict) {
+        let DroppedRecord {
+            service,
+            category,
+            kind,
+            flow,
+            reason,
+        } = self;
+        match verdict {
+            Verdict::Warn { suppressed } => tracing::warn!(
+                service,
+                category,
+                %kind,
+                %flow,
+                suppressed,
+                "dropping a record: {reason}"
+            ),
+            Verdict::Quiet => tracing::debug!(
+                service,
+                category,
+                %kind,
+                %flow,
+                "dropping a record: {reason}"
+            ),
         }
     }
 }

@@ -1,14 +1,16 @@
 //! The calls an application makes to capture its state.
 
+use std::time::Duration;
+
 use burgess_core::flow::FlowId;
 use burgess_core::validation::{Limits, Validate};
 use burgess_core::wire::{Body, PayloadType, Record, Reference, Split, State};
 use serde::Serialize;
 
 use crate::clock::{Clock, SystemClock};
-use crate::drop_log::DropLog;
 use crate::dropped::{DroppedRecord, RecordKind};
 use crate::sink::Sink;
+use crate::throttle::Throttle;
 
 /// Mints flow ids and emits one service's records about them to a [`Sink`].
 ///
@@ -22,7 +24,7 @@ pub struct Emitter<S, C = SystemClock> {
     sink: S,
     clock: C,
     limits: Limits,
-    drop_log: DropLog,
+    drop_throttle: Throttle,
 }
 
 impl<S: Sink> Emitter<S> {
@@ -38,7 +40,7 @@ impl<S: Sink> Emitter<S> {
             sink,
             clock: SystemClock,
             limits: Limits::default(),
-            drop_log: DropLog::default(),
+            drop_throttle: Throttle::default(),
         }
     }
 }
@@ -51,7 +53,7 @@ impl<S: Sink, C: Clock> Emitter<S, C> {
             sink: self.sink,
             clock,
             limits: self.limits,
-            drop_log: self.drop_log,
+            drop_throttle: self.drop_throttle,
         }
     }
 
@@ -150,6 +152,14 @@ impl<S: Sink, C: Clock> Emitter<S, C> {
         );
     }
 
+    /// Waits up to `timeout` for the records emitted so far to be delivered.
+    ///
+    /// Call it when the service shuts down: records the sink still buffers
+    /// when it is dropped are lost. See [`Sink::flush`].
+    pub fn flush(&self, timeout: Duration) {
+        self.sink.flush(timeout);
+    }
+
     fn emit(&self, flow: FlowId, body: Body) {
         let mut record = Record {
             flow_id: flow,
@@ -164,7 +174,7 @@ impl<S: Sink, C: Clock> Emitter<S, C> {
     }
 
     fn log_drop(&self, dropped: &DroppedRecord) {
-        self.drop_log.log(self.clock.now(), dropped);
+        dropped.log(self.drop_throttle.admit(self.clock.now()));
     }
 }
 

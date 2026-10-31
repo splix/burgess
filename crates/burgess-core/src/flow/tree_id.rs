@@ -1,6 +1,7 @@
 //! The id shared by every flow of one tree.
 
 use std::fmt;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 
 use jiff::Timestamp;
@@ -14,8 +15,8 @@ const TIME_BYTES: usize = 6;
 /// Identifies a tree of flows: 6 bytes of root start time in unix milliseconds
 /// followed by 6 random bytes, big-endian.
 ///
-/// It is also the Kafka partition key, which keeps every record of a tree in
-/// one partition and therefore in order.
+/// It is also the Kafka partition key, and picks the partition every record
+/// of the tree goes to; see [`TreeId::partition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TreeId([u8; 12]);
 
@@ -44,6 +45,22 @@ impl TreeId {
         let mut millis = [0; 8];
         millis[8 - TIME_BYTES..].copy_from_slice(&self.0[..TIME_BYTES]);
         Timestamp::from_millisecond(i64::from_be_bytes(millis)).unwrap_or(Timestamp::MAX)
+    }
+
+    /// The Kafka partition, out of `partition_count`, that every record of
+    /// the tree goes to, whichever flow of the tree it is about.
+    ///
+    /// Spelled out here rather than left to a Kafka client's partitioner,
+    /// because clients hash keys differently (librdkafka with CRC32, the Java
+    /// client with murmur2) and producers in any language must agree. Taken
+    /// from the random half of the id, which is already evenly spread; the
+    /// time half is the same for every tree started in the same millisecond.
+    pub fn partition(&self, partition_count: NonZeroU32) -> u32 {
+        let random_half = &self.0[TIME_BYTES..];
+        let mut random = [0; 8];
+        random[8 - random_half.len()..].copy_from_slice(random_half);
+        let partition = u64::from_be_bytes(random) % u64::from(partition_count.get());
+        u32::try_from(partition).expect("below the partition count, which is a u32")
     }
 
     /// The id as it is stored and sent.
@@ -133,6 +150,32 @@ mod tests {
         let earlier = TreeId::mint(Timestamp::from_millisecond(1_000).unwrap(), &mut rng);
         let later = TreeId::mint(Timestamp::from_millisecond(1_001).unwrap(), &mut rng);
         assert!(earlier < later);
+    }
+
+    fn partitions(count: u32) -> NonZeroU32 {
+        NonZeroU32::new(count).unwrap()
+    }
+
+    #[test]
+    fn partition_is_random_half_modulo_count() {
+        let tree = TreeId::from([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 1, 2]);
+        assert_eq!(tree.partition(partitions(7)), 0x0102 % 7);
+    }
+
+    #[test]
+    fn single_partition_takes_every_tree() {
+        let tree = TreeId::mint(Timestamp::now(), &mut rng());
+        assert_eq!(tree.partition(partitions(1)), 0);
+    }
+
+    #[test]
+    fn trees_of_one_millisecond_spread_over_partitions() {
+        let mut rng = rng();
+        let now = Timestamp::now();
+        let used: std::collections::BTreeSet<u32> = (0..100)
+            .map(|_| TreeId::mint(now, &mut rng).partition(partitions(4)))
+            .collect();
+        assert_eq!(used.into_iter().collect::<Vec<_>>(), [0, 1, 2, 3]);
     }
 
     #[test]

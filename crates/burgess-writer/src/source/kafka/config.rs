@@ -42,7 +42,10 @@ pub struct KafkaConfig {
     /// Longest to wait for metadata and offset lookups.
     pub request_timeout: Duration,
     /// Further librdkafka settings passed through as they are, for what
-    /// differs between deployments: TLS, SASL, client id, fetch tuning.
+    /// differs between deployments: client id, fetch tuning.
+    ///
+    /// TLS and SASL settings are refused when the source is created:
+    /// librdkafka is built without OpenSSL until a deployment needs it.
     pub properties: BTreeMap<String, String>,
 }
 

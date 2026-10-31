@@ -12,15 +12,19 @@
 //! application's own tests.
 
 mod clock;
-mod drop_log;
 mod dropped;
 mod emitter;
+#[cfg(feature = "kafka")]
+mod kafka;
 mod memory_sink;
 mod message;
 mod sink;
+mod throttle;
 
 pub use clock::{Clock, SystemClock};
 pub use emitter::Emitter;
+#[cfg(feature = "kafka")]
+pub use kafka::{Compression, KafkaConfig, KafkaSink, KafkaSinkError};
 pub use memory_sink::MemorySink;
 pub use message::Message;
 pub use sink::Sink;

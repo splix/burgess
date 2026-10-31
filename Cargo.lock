@@ -408,9 +408,12 @@ dependencies = [
  "burgess-core",
  "jiff",
  "rand 0.10.3",
+ "rdkafka",
  "serde",
  "serde_json",
+ "testcontainers-modules",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
