@@ -404,6 +404,15 @@ version = "0.1.0-dev"
 [[package]]
 name = "burgess-client"
 version = "0.1.0-dev"
+dependencies = [
+ "burgess-core",
+ "jiff",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
 
 [[package]]
 name = "burgess-core"

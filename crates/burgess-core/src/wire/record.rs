@@ -45,7 +45,7 @@ impl Record {
     }
 
     /// The Kafka partition key. Keying by tree keeps every record of a tree in
-    /// one partition, and therefore in the order it was produced.
+    /// one partition.
     pub fn partition_key(&self) -> TreeId {
         self.flow_id.tree()
     }

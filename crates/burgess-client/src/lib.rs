@@ -5,3 +5,25 @@
 //! never block or fail the application it observes, because the point of
 //! capturing state is to debug that application, not to become a new way for it
 //! to fail.
+//!
+//! An [`Emitter`] turns calls into records and hands them to a [`Sink`], which
+//! delivers them. Keeping delivery behind a trait lets the same instrumentation
+//! publish to Kafka in production and to a [`MemorySink`] in the
+//! application's own tests.
+
+mod clock;
+mod drop_log;
+mod dropped;
+mod emitter;
+mod memory_sink;
+mod message;
+mod sink;
+
+pub use clock::{Clock, SystemClock};
+pub use emitter::Emitter;
+pub use memory_sink::MemorySink;
+pub use message::Message;
+pub use sink::Sink;
+
+pub use burgess_core::flow::{FlowId, IdParseError, TreeId};
+pub use burgess_core::validation::Limits;
