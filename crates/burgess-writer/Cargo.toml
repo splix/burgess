@@ -31,9 +31,11 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 arrow-select.workspace = true
+burgess-client.workspace = true
 # Jail isolates the environment variables each config test sets.
 figment = { workspace = true, features = ["test"] }
 async-trait.workspace = true
+tempfile.workspace = true
 testcontainers-modules.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util", "time"] }
 
