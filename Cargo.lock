@@ -435,6 +435,13 @@ dependencies = [
 [[package]]
 name = "burgess-reader"
 version = "0.1.0-dev"
+dependencies = [
+ "burgess-core",
+ "jiff",
+ "object_store",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "burgess-writer"
