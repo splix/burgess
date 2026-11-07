@@ -1,8 +1,6 @@
 //! Reads files written by the real writer, and checks both the rows a read
 //! returns and which bytes of the file it asked the store for.
 
-mod recording_store;
-
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -28,9 +26,9 @@ use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::metadata::{KeyValue, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterPropertiesBuilder};
-use recording_store::RecordingStore;
 
 use super::*;
+use crate::test_support::RecordingStore;
 
 const FIRST_MS: u64 = 1_793_000_000_000;
 
@@ -471,6 +469,17 @@ async fn without_page_bounds_row_group_bounds_still_rule_out_a_tree() {
 async fn tree_inside_a_page_but_absent_gives_no_rows() {
     let fixture = Fixture::new(&[(tree(2), 30), (tree(4), 30)], 1 << 20).await;
     assert_eq!(fixture.read(tree(3)).await, []);
+}
+
+#[tokio::test]
+async fn reads_only_byte_ranges() {
+    let fixture = Fixture::new(&[(tree(1), 300), (tree(2), 40)], 1 << 20).await;
+    fixture
+        .read_with(StatesFileConfig::default(), tree(2))
+        .await
+        .unwrap();
+    // Panics on any request for a whole object.
+    assert!(!fixture.store.ranges().is_empty());
 }
 
 #[tokio::test]

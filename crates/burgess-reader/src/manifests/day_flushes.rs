@@ -1,5 +1,6 @@
 //! The flushes of one day that readers may use.
 
+use burgess_core::flow::TreeId;
 use burgess_core::storage::{Day, DayManifest, FileStats, FlushEntry, ObjectName, StatesBounds};
 use burgess_core::wire::UnixMillis;
 
@@ -29,6 +30,14 @@ impl FlushGroup {
     /// when it has no rows, so a lookup can skip it unopened.
     pub fn states_bounds(&self) -> Option<StatesBounds> {
         self.entry.states_bounds
+    }
+
+    /// Whether the states file may hold rows of `tree`, by its bounds alone.
+    /// A file without rows has no bounds and holds nothing.
+    pub fn may_hold(&self, tree: TreeId) -> bool {
+        self.entry
+            .states_bounds
+            .is_some_and(|bounds| bounds.min_tree <= tree && tree <= bounds.max_tree)
     }
 
     /// Rows and size of the states file.
@@ -81,6 +90,13 @@ impl DayFlushes {
     pub fn groups(&self) -> &[FlushGroup] {
         &self.groups
     }
+
+    /// The flushes whose states file may hold rows of `tree`, oldest first.
+    /// None of them means the day is negative for the tree: the bounds are
+    /// exact at the day level, so no file of the day needs opening.
+    pub fn holding(&self, tree: TreeId) -> impl Iterator<Item = &FlushGroup> {
+        self.groups.iter().filter(move |group| group.may_hold(tree))
+    }
 }
 
 impl From<DayManifest> for DayFlushes {
@@ -95,5 +111,69 @@ impl From<DayManifest> for DayFlushes {
                 .map(|entry| FlushGroup { day, entry })
                 .collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use burgess_core::wire::UnixMillis;
+
+    use super::*;
+
+    fn entry(nnnn: u64, trees: Option<(u8, u8)>) -> FlushEntry {
+        FlushEntry {
+            nnnn: UnixMillis::from(nnnn),
+            seq: nnnn,
+            states_bounds: trees.map(|(min, max)| StatesBounds {
+                min_tree: TreeId::from([min; 12]),
+                max_tree: TreeId::from([max; 12]),
+                min_ts: UnixMillis::from(0),
+                max_ts: UnixMillis::from(0),
+            }),
+            states: FileStats {
+                rows: u64::from(trees.is_some()),
+                bytes: 100,
+            },
+            refs: FileStats::default(),
+        }
+    }
+
+    fn flushes(entries: Vec<FlushEntry>) -> DayFlushes {
+        DayFlushes::from(DayManifest {
+            entries,
+            ..DayManifest::new("20261107".parse().unwrap(), "writer-1".parse().unwrap())
+        })
+    }
+
+    fn holding(flushes: &DayFlushes, tree: u8) -> Vec<u64> {
+        flushes
+            .holding(TreeId::from([tree; 12]))
+            .map(|group| u64::from(group.nnnn()))
+            .collect()
+    }
+
+    #[test]
+    fn keeps_the_flushes_whose_bounds_include_the_tree() {
+        let day = flushes(vec![
+            entry(1, Some((1, 3))),
+            entry(2, Some((4, 6))),
+            entry(3, Some((3, 5))),
+        ]);
+        assert_eq!(holding(&day, 3), [1, 3]);
+        assert_eq!(holding(&day, 6), [2]);
+    }
+
+    #[test]
+    fn bounds_are_inclusive() {
+        let day = flushes(vec![entry(1, Some((2, 4)))]);
+        assert_eq!(holding(&day, 2), [1]);
+        assert_eq!(holding(&day, 4), [1]);
+        assert_eq!(holding(&day, 5), [] as [u64; 0]);
+    }
+
+    #[test]
+    fn a_flush_without_states_holds_nothing() {
+        let day = flushes(vec![entry(1, None)]);
+        assert_eq!(holding(&day, 2), [] as [u64; 0]);
     }
 }

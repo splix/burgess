@@ -113,9 +113,10 @@ impl ManifestCache {
     }
 
     /// The oldest day still within retention, counting back from today by
-    /// the host's clock. `None` when that day is before the earliest day a
-    /// manifest can name, which leaves every day in.
-    fn oldest_kept(&self) -> Option<Day> {
+    /// the host's clock. Earlier days are empty to this cache. `None` when
+    /// that day is before the earliest day a manifest can name, which leaves
+    /// every day in.
+    pub fn oldest_kept(&self) -> Option<Day> {
         let today = Date::from(Day::utc(Timestamp::now()).ok()?);
         let retention = Span::new().days(i64::from(self.config.retention_days.get()));
         Day::try_from(today.checked_sub(retention).ok()?).ok()

@@ -8,6 +8,7 @@ use object_store::memory::InMemory;
 
 use super::*;
 use crate::manifests::FlushGroup;
+use crate::test_support::days_ago;
 
 const TTL: Duration = Duration::from_secs(5);
 const RETENTION_DAYS: u32 = 30;
@@ -15,11 +16,6 @@ const RETENTION_DAYS: u32 = 30;
 /// Today, so that the day stays within retention whenever the tests run.
 fn day() -> Day {
     days_ago(0)
-}
-
-fn days_ago(days: i64) -> Day {
-    let today = Date::from(Day::utc(Timestamp::now()).unwrap());
-    Day::try_from(today.checked_sub(Span::new().days(days)).unwrap()).unwrap()
 }
 
 fn entry(seq: u64) -> FlushEntry {

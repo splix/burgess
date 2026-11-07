@@ -7,3 +7,8 @@
 pub mod manifests;
 
 pub mod states_file;
+
+pub mod tree_lookup;
+
+#[cfg(test)]
+mod test_support;

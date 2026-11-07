@@ -1,12 +1,15 @@
-//! An in-memory store that remembers every byte range it was asked for.
+//! Test doubles shared by the reader's tests.
 
 use std::fmt;
 use std::ops::Range;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
+use burgess_core::storage::Day;
 use bytes::Bytes;
 use futures::stream::BoxStream;
+use jiff::civil::Date;
+use jiff::{Span, Timestamp};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
@@ -14,28 +17,58 @@ use object_store::{
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
 };
 
-/// Records ranges as the reader asks for them. The store's own handling of
-/// a multi-range request merges nearby ranges, which would hide whether the
-/// reader asked for a page it did not need.
+/// An in-memory store that remembers every read it was asked for.
+///
+/// Ranges are recorded as the reader asks for them. The store's own handling
+/// of a multi-range request merges nearby ranges, which would hide whether
+/// the reader asked for a page it did not need.
 #[derive(Debug, Default)]
-pub(super) struct RecordingStore {
-    pub(super) inner: InMemory,
-    requests: Mutex<Vec<Vec<Range<u64>>>>,
+pub(crate) struct RecordingStore {
+    pub(crate) inner: InMemory,
+    requests: Mutex<Vec<Request>>,
+}
+
+/// One read request.
+#[derive(Debug, Clone)]
+pub(crate) struct Request {
+    /// The object read.
+    pub(crate) path: String,
+    /// The byte ranges asked for, or `None` for the whole object.
+    pub(crate) ranges: Option<Vec<Range<u64>>>,
 }
 
 impl RecordingStore {
-    /// Every request so far, each with the ranges it asked for.
-    pub(super) fn requests(&self) -> Vec<Vec<Range<u64>>> {
+    /// Every request so far.
+    pub(crate) fn requests(&self) -> Vec<Request> {
         self.requests.lock().unwrap().clone()
     }
 
-    /// Every range asked for so far.
-    pub(super) fn ranges(&self) -> Vec<Range<u64>> {
-        self.requests().into_iter().flatten().collect()
+    /// The objects read so far, one entry per request.
+    pub(crate) fn paths(&self) -> Vec<String> {
+        self.requests()
+            .into_iter()
+            .map(|request| request.path)
+            .collect()
     }
 
-    fn record(&self, ranges: Vec<Range<u64>>) {
-        self.requests.lock().unwrap().push(ranges);
+    /// Every range asked for so far. Panics if an object was read whole,
+    /// since then the ranges do not tell what was fetched.
+    pub(crate) fn ranges(&self) -> Vec<Range<u64>> {
+        self.requests()
+            .into_iter()
+            .flat_map(|request| {
+                request
+                    .ranges
+                    .unwrap_or_else(|| panic!("{} was read whole", request.path))
+            })
+            .collect()
+    }
+
+    fn record(&self, location: &Path, ranges: Option<Vec<Range<u64>>>) {
+        self.requests.lock().unwrap().push(Request {
+            path: location.to_string(),
+            ranges,
+        });
     }
 }
 
@@ -70,8 +103,10 @@ impl ObjectStore for RecordingStore {
         location: &Path,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
+        assert!(!options.head, "the reader never sends HEAD requests");
         match &options.range {
-            Some(GetRange::Bounded(range)) => self.record(vec![range.clone()]),
+            None => self.record(location, None),
+            Some(GetRange::Bounded(range)) => self.record(location, Some(vec![range.clone()])),
             other => panic!("the reader must ask for bounded ranges, got {other:?}"),
         }
         self.inner.get_opts(location, options).await
@@ -82,7 +117,7 @@ impl ObjectStore for RecordingStore {
         location: &Path,
         ranges: &[Range<u64>],
     ) -> object_store::Result<Vec<Bytes>> {
-        self.record(ranges.to_vec());
+        self.record(location, Some(ranges.to_vec()));
         self.inner.get_ranges(location, ranges).await
     }
 
@@ -126,4 +161,11 @@ impl ObjectStore for RecordingStore {
     ) -> object_store::Result<()> {
         self.inner.rename_opts(from, to, options).await
     }
+}
+
+/// The day `days` before today by the host clock, which the reader also
+/// uses for retention, so test days stay within it whenever the tests run.
+pub(crate) fn days_ago(days: i64) -> Day {
+    let today = Date::from(Day::utc(Timestamp::now()).unwrap());
+    Day::try_from(today.checked_sub(Span::new().days(days)).unwrap()).unwrap()
 }
