@@ -63,6 +63,9 @@ impl TreeId {
         u32::try_from(partition).expect("below the partition count, which is a u32")
     }
 
+    /// Length of the id in bytes, as it is stored and sent.
+    pub const LEN: usize = 12;
+
     /// The id as it is stored and sent.
     pub fn as_bytes(&self) -> &[u8; 12] {
         &self.0

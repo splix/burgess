@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{Field, Schema, SchemaRef};
+use burgess_core::storage::{SCHEMA_VERSION, SCHEMA_VERSION_KEY};
 use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
 use parquet::basic::Compression;
 use parquet::errors::ParquetError;
@@ -15,10 +16,6 @@ use super::columns::{Column, Role};
 use super::config::ParquetConfig;
 use super::table::Table;
 use super::writer::{FileError, ParquetFile};
-
-/// Version of the file layout, bumped when a reader of older files would
-/// misread newer ones.
-const SCHEMA_VERSION: &str = "1";
 
 /// Approximate bytes of rows converted to Arrow at a time, which bounds the
 /// memory the conversion needs on top of the batch itself.
@@ -107,7 +104,7 @@ fn properties<R>(
         .set_bloom_filter_enabled(false)
         .set_statistics_enabled(EnabledStatistics::Chunk)
         .set_key_value_metadata(Some(vec![
-            KeyValue::new("burgess.schema_version".into(), SCHEMA_VERSION.to_string()),
+            KeyValue::new(SCHEMA_VERSION_KEY.into(), SCHEMA_VERSION.to_string()),
             KeyValue::new(
                 "burgess.writer".into(),
                 concat!("burgess-writer ", env!("CARGO_PKG_VERSION")).to_string(),

@@ -5,3 +5,5 @@
 //! database would cost more to run than the queries it would speed up.
 
 pub mod manifests;
+
+pub mod states_file;

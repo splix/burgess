@@ -6,15 +6,19 @@
 //! object formats live here where both see the same definition.
 
 mod day;
+mod file_layout;
 mod frame;
 mod manifest;
 mod object_name;
+mod state_row;
 mod writer_id;
 
 pub use day::{Day, DayError};
+pub use file_layout::{SCHEMA_VERSION, SCHEMA_VERSION_KEY, StatesColumn};
 pub use frame::FrameError;
 pub use manifest::{DayManifest, EntryProblem, FileStats, FlushEntry, ManifestError, StatesBounds};
 pub use object_name::ObjectName;
+pub use state_row::{EntryKind, StateEntry, StateRow};
 pub use writer_id::{WriterId, WriterIdError};
 
 /// Types generated from `proto/burgess/storage/v1/manifest.proto`.

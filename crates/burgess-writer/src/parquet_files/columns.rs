@@ -79,13 +79,13 @@ impl<R> Column<R> {
 /// Both files store the tree id as its 12 raw bytes, so min and max
 /// statistics compare the same way the ids sort.
 pub(super) fn tree_type() -> DataType {
-    DataType::FixedSizeBinary(12)
+    DataType::FixedSizeBinary(TreeId::LEN as i32)
 }
 
 pub(super) fn tree_values(
     trees: impl ExactSizeIterator<Item = TreeId>,
 ) -> Result<ArrayRef, ArrowError> {
-    let mut builder = FixedSizeBinaryBuilder::with_capacity(trees.len(), 12);
+    let mut builder = FixedSizeBinaryBuilder::with_capacity(trees.len(), TreeId::LEN as i32);
     for tree in trees {
         builder.append_value(tree.as_bytes())?;
     }

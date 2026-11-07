@@ -4,46 +4,9 @@
 //! contiguous range; references go to another, sorted by the outside id they
 //! are looked up by.
 
-use std::collections::BTreeMap;
-
 use burgess_core::flow::{Subflow, TreeId};
-use burgess_core::wire::{Body, PayloadType, Record, UnixMillis};
-
-/// A row of the states file: a state, or a split filed under its parent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StateRow {
-    /// Tree of the flow the row belongs to.
-    pub tree: TreeId,
-    /// Subflow the row belongs to; for a split, the parent's.
-    pub subflow: Subflow,
-    /// When it happened, by the producer clock.
-    pub time: UnixMillis,
-    /// Service that captured the state or performed the split.
-    pub service: String,
-    /// Category of the state or of the split.
-    pub category: String,
-    /// What the row records.
-    pub entry: StateEntry,
-}
-
-/// What a states-file row records.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StateEntry {
-    /// A snapshot of application state.
-    State {
-        /// Labels lookups can filter on.
-        meta: BTreeMap<String, String>,
-        /// How to read the payload.
-        payload_type: PayloadType,
-        /// The captured state.
-        payload: Vec<u8>,
-    },
-    /// The flow started a child flow.
-    Split {
-        /// Subflow of the child, in the same tree.
-        child: Subflow,
-    },
-}
+use burgess_core::storage::{StateEntry, StateRow};
+use burgess_core::wire::{Body, Record, UnixMillis};
 
 /// A row of the references file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,14 +25,6 @@ pub struct RefRow {
     pub subflow: Subflow,
     /// When the link was recorded, by the producer clock.
     pub time: UnixMillis,
-}
-
-impl StateRow {
-    /// Sorting by this puts a flow's rows next to each other in time order,
-    /// and a tree's flows next to each other.
-    pub(super) fn sort_key(&self) -> (TreeId, Subflow, UnixMillis) {
-        (self.tree, self.subflow, self.time)
-    }
 }
 
 impl RefRow {
@@ -129,8 +84,10 @@ impl From<Record> for Row {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use burgess_core::flow::FlowId;
-    use burgess_core::wire::{Reference, Split, State};
+    use burgess_core::wire::{PayloadType, Reference, Split, State};
 
     use super::*;
 

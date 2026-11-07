@@ -5,6 +5,7 @@ use std::sync::Arc;
 use arrow_array::builder::{MapBuilder, MapFieldNames, StringBuilder};
 use arrow_array::{ArrayRef, BinaryArray, StringArray, UInt32Array};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
+use burgess_core::storage::StatesColumn;
 
 use super::columns::{Column, tree_type, tree_values, ts_type, ts_values};
 use super::table::Table;
@@ -13,60 +14,88 @@ use crate::batch::{StateEntry, StateRow};
 impl Table for StateRow {
     fn columns() -> Vec<Column<Self>> {
         vec![
-            Column::required("tree", tree_type(), |rows: &[Self]| {
+            Column::required(StatesColumn::Tree.name(), tree_type(), |rows: &[Self]| {
                 tree_values(rows.iter().map(|row| row.tree))
             })
             .sort_key(),
-            Column::required("subflow", DataType::UInt32, |rows: &[Self]| {
-                Ok(Arc::new(UInt32Array::from_iter_values(
-                    rows.iter().map(|row| u32::from(row.subflow)),
-                )))
-            })
+            Column::required(
+                StatesColumn::Subflow.name(),
+                DataType::UInt32,
+                |rows: &[Self]| {
+                    Ok(Arc::new(UInt32Array::from_iter_values(
+                        rows.iter().map(|row| u32::from(row.subflow)),
+                    )))
+                },
+            )
             .sort_key(),
-            Column::required("ts", ts_type(), |rows: &[Self]| {
+            Column::required(StatesColumn::Ts.name(), ts_type(), |rows: &[Self]| {
                 Ok(ts_values(rows.iter().map(|row| row.time)))
             })
             .sort_key(),
-            Column::required("kind", DataType::Utf8, |rows: &[Self]| {
-                Ok(Arc::new(StringArray::from_iter_values(
-                    rows.iter().map(|row| row.entry.kind()),
-                )))
-            }),
-            Column::required("service", DataType::Utf8, |rows: &[Self]| {
-                Ok(Arc::new(StringArray::from_iter_values(
-                    rows.iter().map(|row| row.service.as_str()),
-                )))
-            }),
-            Column::required("category", DataType::Utf8, |rows: &[Self]| {
-                Ok(Arc::new(StringArray::from_iter_values(
-                    rows.iter().map(|row| row.category.as_str()),
-                )))
-            }),
-            Column::nullable("child_subflow", DataType::UInt32, |rows: &[Self]| {
-                Ok(Arc::new(UInt32Array::from_iter(rows.iter().map(
-                    |row| match row.entry {
-                        StateEntry::Split { child } => Some(u32::from(child)),
-                        StateEntry::State { .. } => None,
-                    },
-                ))))
-            }),
-            Column::required("meta", meta_type(), meta_values),
-            Column::nullable("payload_type", DataType::Utf8, |rows: &[Self]| {
-                Ok(Arc::new(StringArray::from_iter(rows.iter().map(
-                    |row| match &row.entry {
-                        StateEntry::State { payload_type, .. } => Some(payload_type.name()),
-                        StateEntry::Split { .. } => None,
-                    },
-                ))))
-            }),
-            Column::nullable("payload", DataType::Binary, |rows: &[Self]| {
-                Ok(Arc::new(BinaryArray::from_iter(rows.iter().map(
-                    |row| match &row.entry {
-                        StateEntry::State { payload, .. } => Some(payload.as_slice()),
-                        StateEntry::Split { .. } => None,
-                    },
-                ))))
-            })
+            Column::required(
+                StatesColumn::Kind.name(),
+                DataType::Utf8,
+                |rows: &[Self]| {
+                    Ok(Arc::new(StringArray::from_iter_values(
+                        rows.iter().map(|row| row.entry.kind().name()),
+                    )))
+                },
+            ),
+            Column::required(
+                StatesColumn::Service.name(),
+                DataType::Utf8,
+                |rows: &[Self]| {
+                    Ok(Arc::new(StringArray::from_iter_values(
+                        rows.iter().map(|row| row.service.as_str()),
+                    )))
+                },
+            ),
+            Column::required(
+                StatesColumn::Category.name(),
+                DataType::Utf8,
+                |rows: &[Self]| {
+                    Ok(Arc::new(StringArray::from_iter_values(
+                        rows.iter().map(|row| row.category.as_str()),
+                    )))
+                },
+            ),
+            Column::nullable(
+                StatesColumn::ChildSubflow.name(),
+                DataType::UInt32,
+                |rows: &[Self]| {
+                    Ok(Arc::new(UInt32Array::from_iter(rows.iter().map(
+                        |row| match row.entry {
+                            StateEntry::Split { child } => Some(u32::from(child)),
+                            StateEntry::State { .. } => None,
+                        },
+                    ))))
+                },
+            ),
+            Column::required(StatesColumn::Meta.name(), meta_type(), meta_values),
+            Column::nullable(
+                StatesColumn::PayloadType.name(),
+                DataType::Utf8,
+                |rows: &[Self]| {
+                    Ok(Arc::new(StringArray::from_iter(rows.iter().map(
+                        |row| match &row.entry {
+                            StateEntry::State { payload_type, .. } => Some(payload_type.name()),
+                            StateEntry::Split { .. } => None,
+                        },
+                    ))))
+                },
+            ),
+            Column::nullable(
+                StatesColumn::Payload.name(),
+                DataType::Binary,
+                |rows: &[Self]| {
+                    Ok(Arc::new(BinaryArray::from_iter(rows.iter().map(
+                        |row| match &row.entry {
+                            StateEntry::State { payload, .. } => Some(payload.as_slice()),
+                            StateEntry::Split { .. } => None,
+                        },
+                    ))))
+                },
+            )
             .blob(),
         ]
     }
@@ -83,16 +112,6 @@ impl Table for StateRow {
             StateEntry::Split { .. } => 0,
         };
         self.service.len() + self.category.len() + entry
-    }
-}
-
-impl StateEntry {
-    /// The value of the `kind` column.
-    fn kind(&self) -> &'static str {
-        match self {
-            StateEntry::State { .. } => "state",
-            StateEntry::Split { .. } => "split",
-        }
     }
 }
 

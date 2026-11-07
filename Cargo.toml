@@ -18,6 +18,7 @@ rust-version = "1.97"
 burgess-core = { path = "crates/burgess-core" }
 burgess-api = { path = "crates/burgess-api" }
 burgess-client = { path = "crates/burgess-client" }
+burgess-writer = { path = "crates/burgess-writer" }
 
 arrow-array = "60"
 async-trait = "0.1"

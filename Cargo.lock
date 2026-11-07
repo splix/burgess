@@ -436,9 +436,16 @@ dependencies = [
 name = "burgess-reader"
 version = "0.1.0-dev"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
  "burgess-core",
+ "burgess-writer",
+ "bytes",
+ "futures",
  "jiff",
  "object_store",
+ "parquet",
  "thiserror",
  "tokio",
 ]
@@ -2015,12 +2022,14 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "chrono",
+ "futures",
  "half",
  "hashbrown 0.17.1",
  "num-bigint 0.5.1",
  "num-integer",
  "num-traits",
  "seq-macro",
+ "tokio",
  "twox-hash",
  "zstd",
 ]

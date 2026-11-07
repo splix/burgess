@@ -13,6 +13,7 @@ mod rows;
 mod skip;
 
 pub use accumulator::Accumulator;
+pub use burgess_core::storage::{StateEntry, StateRow};
 pub use collect::SortedBatch;
 pub use config::{BatchConfig, BatchConfigError};
-pub use rows::{RefRow, StateEntry, StateRow};
+pub use rows::RefRow;
