@@ -1,4 +1,5 @@
-//! Finding every row of a tree, across the days it was written on.
+//! Finding every row of a tree, or of one flow and the flows below it,
+//! across the days they were written on.
 //!
 //! A tree id starts with the time its root was minted, and the writer files
 //! rows by the day it flushes them, which is normally that day or later. So
@@ -10,6 +11,7 @@ mod config;
 mod error;
 mod found;
 mod lookup;
+mod subtree;
 mod walk;
 
 pub use config::TreeLookupConfig;

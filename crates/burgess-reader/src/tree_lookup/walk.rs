@@ -9,7 +9,7 @@ pub(super) enum DayOutcome {
     Negative,
     /// Some file of the day may hold the tree.
     Positive,
-    /// The day says nothing about the tree: the writer stored nothing that
+    /// The day says nothing about the tree: the writer stored no file that
     /// day, or its manifest could not be read. A writer outage must not
     /// look like the end of the tree.
     Unknown,

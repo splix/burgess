@@ -118,7 +118,9 @@ impl ManifestCache {
     /// every day in.
     pub fn oldest_kept(&self) -> Option<Day> {
         let today = Date::from(Day::utc(Timestamp::now()).ok()?);
-        let retention = Span::new().days(i64::from(self.config.retention_days.get()));
+        let retention = Span::new()
+            .try_days(i64::from(self.config.retention_days.get()))
+            .ok()?;
         Day::try_from(today.checked_sub(retention).ok()?).ok()
     }
 

@@ -274,6 +274,16 @@ async fn last_day_of_retention_is_still_read() {
     assert!(cache(&store).day(oldest).await.unwrap().is_some());
 }
 
+#[test]
+fn retention_further_back_than_any_day_keeps_every_day() {
+    let config = ManifestCacheConfig {
+        retention_days: NonZeroU32::MAX,
+        ..config(TTL)
+    };
+    let cache = ManifestCache::new(Arc::new(InMemory::new()), config);
+    assert_eq!(cache.oldest_kept(), None);
+}
+
 fn cached(sealed: bool, seqs: &[u64], fetched_at: Instant) -> Cached {
     Cached {
         flushes: Some(Arc::new(manifest(day(), sealed, seqs).into())),

@@ -1,14 +1,13 @@
 //! Lookups over days of real files and manifests, checking both the rows
 //! returned and which objects were requested.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use burgess_core::flow::{Subflow, TreeId};
+use burgess_core::flow::{FlowId, Subflow, TreeId};
 use burgess_core::storage::{
-    Day, DayManifest, FileStats, FlushEntry, ObjectName, StateEntry, StateRow, StatesBounds,
+    Day, DayManifest, FileStats, FlushEntry, ObjectName, StateRow, StatesBounds,
 };
-use burgess_core::wire::{PayloadType, UnixMillis};
+use burgess_core::wire::UnixMillis;
 use burgess_writer::batch::SortedBatch;
 use burgess_writer::parquet_files::{FileWriter, ParquetConfig};
 use jiff::Timestamp;
@@ -19,7 +18,7 @@ use object_store::path::Path;
 use super::*;
 use crate::manifests::{ManifestCache, ManifestCacheConfig, ManifestReadError};
 use crate::states_file::{StatesFileConfig, StatesFileProblem, StatesFileReader};
-use crate::test_support::{RecordingStore, days_ago};
+use crate::test_support::{RecordingStore, days_ago, state_row, subflows};
 
 fn noon(day: Day) -> Timestamp {
     Date::from(day)
@@ -37,28 +36,15 @@ fn minted_on(day: Day, random: u8) -> TreeId {
     TreeId::from(id)
 }
 
+/// `offset` milliseconds past noon of `day`, in unix milliseconds.
+fn at(day: Day, offset: u64) -> u64 {
+    noon(day).as_millisecond() as u64 + offset
+}
+
 /// `count` rows of `tree` written on `day`, every third a split.
 fn rows(tree: TreeId, day: Day, count: u64) -> Vec<StateRow> {
-    let first = noon(day).as_millisecond() as u64;
     (0..count)
-        .map(|i| StateRow {
-            tree,
-            subflow: Subflow::from(i as u32 % 2),
-            time: UnixMillis::from(first + i),
-            service: "checkout".into(),
-            category: "step".into(),
-            entry: if i % 3 == 2 {
-                StateEntry::Split {
-                    child: Subflow::from(7),
-                }
-            } else {
-                StateEntry::State {
-                    meta: BTreeMap::new(),
-                    payload_type: PayloadType::Json,
-                    payload: format!(r#"{{"i":{i}}}"#).into_bytes(),
-                }
-            },
-        })
+        .map(|i| state_row(tree, i as u32 % 2, at(day, i), (i % 3 == 2).then_some(7)))
         .collect()
 }
 
@@ -298,6 +284,22 @@ async fn a_day_whose_bounds_admit_the_tree_is_positive_without_its_rows() {
 }
 
 #[tokio::test]
+async fn a_day_whose_manifest_lists_no_files_does_not_end_the_walk() {
+    // The writer empties a day's manifest when it drops the only flush it
+    // could not finish before a restart.
+    let tree = minted_on(days_ago(5), 5);
+    let before = flush(vec![rows(tree, days_ago(5), 3)]);
+    let after = flush(vec![rows(tree, days_ago(2), 3)]);
+    let days = Days::new();
+    days.put(days_ago(5), &[&before]).await;
+    days.put_negative(days_ago(4)).await;
+    days.put(days_ago(3), &[]).await;
+    days.put(days_ago(2), &[&after]).await;
+
+    assert_eq!(days.tree(tree, None).await, of(tree, &[&before, &after]));
+}
+
+#[tokio::test]
 async fn days_without_a_manifest_do_not_end_the_walk() {
     // The writer was down for three days and stored the backlog afterwards.
     let tree = minted_on(days_ago(6), 5);
@@ -392,6 +394,24 @@ async fn days_before_finds_rows_filed_before_the_ids_day() {
 }
 
 #[tokio::test]
+async fn days_before_further_back_than_any_day_starts_at_retention() {
+    let oldest = days_ago(i64::from(
+        ManifestCacheConfig::default().retention_days.get(),
+    ));
+    let tree = minted_on(days_ago(3), 5);
+    let early = flush(vec![rows(tree, days_ago(5), 3)]);
+    let days = Days::new();
+    days.put(days_ago(5), &[&early]).await;
+
+    let config = TreeLookupConfig {
+        days_before: u32::MAX,
+        ..TreeLookupConfig::default()
+    };
+    assert_eq!(days.found(config, tree, None).await, of(tree, &[&early]));
+    assert_eq!(days.manifest_days().first(), Some(&oldest));
+}
+
+#[tokio::test]
 async fn days_before_the_ids_day_do_not_count_towards_the_stop() {
     let tree = minted_on(days_ago(3), 5);
     let own = flush(vec![rows(tree, days_ago(3), 3)]);
@@ -477,6 +497,73 @@ async fn a_listed_file_that_is_gone_is_reported_and_the_others_are_read() {
     };
     assert_eq!(error.file(), &gone);
     assert!(matches!(error.problem(), StatesFileProblem::Store(_)));
+}
+
+#[tokio::test]
+async fn a_flow_brings_the_flows_split_below_it_on_later_days() {
+    let (first, second) = (days_ago(3), days_ago(2));
+    let tree = minted_on(first, 5);
+    let days = Days::new();
+    days.put(
+        first,
+        &[&flush(vec![vec![
+            state_row(tree, 0, at(first, 0), Some(1)),
+            state_row(tree, 0, at(first, 1), Some(4)),
+            state_row(tree, 1, at(first, 2), None),
+            state_row(tree, 4, at(first, 3), None),
+        ]])],
+    )
+    .await;
+    days.put(
+        second,
+        &[&flush(vec![vec![
+            state_row(tree, 1, at(second, 0), Some(2)),
+            state_row(tree, 2, at(second, 1), Some(3)),
+            state_row(tree, 3, at(second, 2), None),
+        ]])],
+    )
+    .await;
+
+    let found = days
+        .lookup(TreeLookupConfig::default())
+        .flow(FlowId::new(tree, Subflow::from(1)), None)
+        .await;
+
+    assert!(found.problems.is_empty(), "{:?}", found.problems);
+    assert_eq!(subflows(&found.rows), [1, 1, 2, 3]);
+}
+
+#[tokio::test]
+async fn a_flow_reports_what_the_tree_could_not_read() {
+    let tree = minted_on(days_ago(3), 5);
+    let broken = days_ago(2);
+    let days = Days::new();
+    days.put(
+        days_ago(3),
+        &[&flush(vec![vec![state_row(
+            tree,
+            1,
+            at(days_ago(3), 0),
+            None,
+        )]])],
+    )
+    .await;
+    days.put_object(
+        &ObjectName::Manifest { day: broken },
+        b"not a manifest".to_vec(),
+    )
+    .await;
+
+    let found = days
+        .lookup(TreeLookupConfig::default())
+        .flow(FlowId::new(tree, Subflow::from(1)), None)
+        .await;
+
+    assert_eq!(subflows(&found.rows), [1]);
+    assert!(matches!(
+        found.problems.as_slice(),
+        [TreeLookupError::Manifest(ManifestReadError::Invalid { day, .. })] if *day == broken
+    ));
 }
 
 #[test]

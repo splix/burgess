@@ -1,11 +1,14 @@
 //! Test doubles shared by the reader's tests.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use burgess_core::storage::Day;
+use burgess_core::flow::{Subflow, TreeId};
+use burgess_core::storage::{Day, StateEntry, StateRow};
+use burgess_core::wire::{PayloadType, UnixMillis};
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use jiff::civil::Date;
@@ -105,7 +108,15 @@ impl ObjectStore for RecordingStore {
     ) -> object_store::Result<GetResult> {
         assert!(!options.head, "the reader never sends HEAD requests");
         match &options.range {
-            None => self.record(location, None),
+            None => {
+                // Manifests are small and read whole; a states file read whole
+                // is a lookup that lost its page pruning.
+                assert!(
+                    !location.as_ref().ends_with(".parquet"),
+                    "{location} was read whole"
+                );
+                self.record(location, None)
+            }
             Some(GetRange::Bounded(range)) => self.record(location, Some(vec![range.clone()])),
             other => panic!("the reader must ask for bounded ranges, got {other:?}"),
         }
@@ -128,20 +139,22 @@ impl ObjectStore for RecordingStore {
         self.inner.delete_stream(locations)
     }
 
+    // The manifests say which files exist, so the reader never lists the
+    // store: a listing is paged, and would cost a request per page.
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        self.inner.list(prefix)
+        panic!("the reader never lists the store, got a listing of {prefix:?}")
     }
 
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,
-        offset: &Path,
+        _offset: &Path,
     ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        self.inner.list_with_offset(prefix, offset)
+        panic!("the reader never lists the store, got a listing of {prefix:?}")
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
-        self.inner.list_with_delimiter(prefix).await
+        panic!("the reader never lists the store, got a listing of {prefix:?}")
     }
 
     async fn copy_opts(
@@ -168,4 +181,31 @@ impl ObjectStore for RecordingStore {
 pub(crate) fn days_ago(days: i64) -> Day {
     let today = Date::from(Day::utc(Timestamp::now()).unwrap());
     Day::try_from(today.checked_sub(Span::new().days(days)).unwrap()).unwrap()
+}
+
+/// A row of `subflow` in `tree` at `time` in unix milliseconds: a split to
+/// `child`, or a state when there is none.
+pub(crate) fn state_row(tree: TreeId, subflow: u32, time: u64, child: Option<u32>) -> StateRow {
+    StateRow {
+        tree,
+        subflow: Subflow::from(subflow),
+        time: UnixMillis::from(time),
+        service: "checkout".into(),
+        category: "step".into(),
+        entry: match child {
+            Some(child) => StateEntry::Split {
+                child: Subflow::from(child),
+            },
+            None => StateEntry::State {
+                meta: BTreeMap::new(),
+                payload_type: PayloadType::Json,
+                payload: b"{}".to_vec(),
+            },
+        },
+    }
+}
+
+/// The subflow of each row, in order.
+pub(crate) fn subflows(rows: &[StateRow]) -> Vec<u32> {
+    rows.iter().map(|row| u32::from(row.subflow)).collect()
 }
