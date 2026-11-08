@@ -46,6 +46,8 @@ thiserror = "2"
 tempfile = "3"
 testcontainers-modules = { version = "0.15", features = ["kafka"] }
 tokio = "1"
+tonic = { version = "0.14", default-features = false }
+tonic-prost = "0.14"
 tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -54,6 +56,7 @@ wiremock = "0.6"
 
 prost-build = "0.14"
 protox = "0.9"
+tonic-prost-build = "0.14"
 
 [workspace.lints.rust]
 missing_docs = "warn"

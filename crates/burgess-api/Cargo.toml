@@ -8,9 +8,16 @@ rust-version.workspace = true
 [dependencies]
 burgess-core.workspace = true
 jiff = { workspace = true, features = ["serde"] }
+prost.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
+tonic = { workspace = true, features = ["codegen"] }
+tonic-prost.workspace = true
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
 
 [lints]
 workspace = true

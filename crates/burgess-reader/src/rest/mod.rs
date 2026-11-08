@@ -12,7 +12,7 @@ mod params;
 mod routes;
 
 pub use error::RequestError;
-pub use routes::{Queries, router};
+pub use routes::router;
 
 #[cfg(test)]
 mod tests;

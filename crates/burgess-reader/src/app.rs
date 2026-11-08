@@ -5,14 +5,16 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::serve::ListenerExt;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 use crate::config::Settings;
 use crate::manifests::ManifestCache;
-use crate::rest::{self, Queries};
+use crate::queries::Queries;
 use crate::states_file::StatesFileReader;
 use crate::tree_lookup::TreeLookup;
+use crate::{grpc, rest};
 
 /// Why the query service could not start or stopped with an error.
 #[derive(Debug, thiserror::Error)]
@@ -74,10 +76,11 @@ impl Server {
         let manifests = ManifestCache::new(store.clone(), settings.manifests);
         let files = StatesFileReader::new(store, settings.files);
         let lookup = TreeLookup::new(Arc::new(manifests), files, settings.lookup);
-        let router = rest::router(Queries {
+        let queries = Arc::new(Queries {
             lookup,
             limits: settings.pages,
         });
+        let router = grpc::router(queries.clone()).merge(rest::router(queries));
         let listener =
             TcpListener::bind(settings.listen)
                 .await
@@ -100,7 +103,14 @@ impl Server {
             Ok(addr) => tracing::info!(%addr, "listening"),
             Err(error) => tracing::warn!(%error, "listening on an unknown address"),
         }
-        axum::serve(self.listener, self.router)
+        // Without TCP_NODELAY, a small gRPC frame can wait for the ACK of the
+        // frame before it, which adds latency to each answer.
+        let listener = self.listener.tap_io(|tcp| {
+            if let Err(error) = tcp.set_nodelay(true) {
+                tracing::warn!(%error, "cannot set TCP_NODELAY on a connection");
+            }
+        });
+        axum::serve(listener, self.router)
             .with_graceful_shutdown(async move {
                 let _ = stop.wait_for(|stop| *stop).await;
             })

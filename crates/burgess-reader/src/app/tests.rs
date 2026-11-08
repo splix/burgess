@@ -1,13 +1,18 @@
 //! The service as it runs: settings, a store in a local directory, and
-//! requests over a real socket.
+//! requests over a real socket, REST and gRPC on the same one.
 
 use std::path::Path;
 
+use burgess_api::grpc::GetTreeRequest;
+use burgess_api::grpc::get_tree_request::Tree;
+use burgess_api::grpc::query_service_client::QueryServiceClient;
 use burgess_api::{ErrorBody, Page};
 use burgess_store::StoreConfig;
+use futures::TryStreamExt;
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tonic::transport::Channel;
 
 use super::*;
 use crate::manifests::ManifestCacheConfig;
@@ -65,6 +70,21 @@ async fn answers_lookups_over_files_in_a_local_directory() {
     assert_eq!((status, page.rows.len()), (200, 3));
     let (status, error) = get::<ErrorBody>(addr, &format!("/v1/flows/{tree}")).await;
     assert_eq!(status, 400, "{error:?}");
+    let channel = Channel::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let request = GetTreeRequest {
+        tree: Some(Tree::TreeId(tree.to_string())),
+        ..Default::default()
+    };
+    let answer = QueryServiceClient::new(channel)
+        .get_tree(request)
+        .await
+        .expect("gRPC on the same port");
+    let messages: Vec<_> = answer.into_inner().try_collect().await.unwrap();
+    assert_eq!(messages.len(), 3);
 
     stop.send(true).unwrap();
     running.await.unwrap().expect("the service stops cleanly");

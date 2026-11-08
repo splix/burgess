@@ -8,7 +8,7 @@ use burgess_api::{ErrorBody, TimeParseError};
 use burgess_core::flow::IdParseError;
 use burgess_core::report::error_chain;
 
-use crate::pages::LimitError;
+use crate::queries::PageRequestError;
 
 /// Why a request cannot be served. Each answers with an
 /// [`ErrorBody`] saying what to change, so a client reads every error the
@@ -27,9 +27,9 @@ pub enum RequestError {
         /// The value given.
         found: String,
     },
-    /// `limit` is a number the service does not serve.
+    /// `until` or `limit` is a value that the service does not serve.
     #[error(transparent)]
-    Limit(#[from] LimitError),
+    Page(#[from] PageRequestError),
     /// The path or the query string cannot be read. That includes a query
     /// naming an option the route does not take, since a misspelled option
     /// would otherwise be silently ignored.

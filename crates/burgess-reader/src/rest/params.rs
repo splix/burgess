@@ -1,13 +1,11 @@
 //! The options a lookup request takes from its query string.
 
-use std::num::NonZeroUsize;
-
 use burgess_api::parse_time;
-use jiff::Timestamp;
 use serde::Deserialize;
 
 use super::error::RequestError;
 use crate::pages::PageLimits;
+use crate::queries::PageRequest;
 
 /// The query string as given. Values are read as text and checked here, so
 /// that a bad one is reported in the API's own error body.
@@ -16,15 +14,6 @@ use crate::pages::PageLimits;
 pub(super) struct PageParams {
     until: Option<String>,
     limit: Option<String>,
-}
-
-/// The options of a lookup request, checked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct PageRequest {
-    /// The last day the lookup must cover, as the lookup takes it.
-    pub(super) until: Option<Timestamp>,
-    /// The rows the page may hold.
-    pub(super) limit: NonZeroUsize,
 }
 
 impl PageParams {
@@ -38,9 +27,6 @@ impl PageParams {
                     .map_err(|_| RequestError::LimitNotANumber { found: limit })
             })
             .transpose()?;
-        Ok(PageRequest {
-            until,
-            limit: limits.limit(limit)?,
-        })
+        Ok(PageRequest::new(until, limit, limits)?)
     }
 }

@@ -1,6 +1,8 @@
 //! Requests to the routes over days of real files, checking status, body
 //! and the options each route takes.
 
+use std::sync::Arc;
+
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
@@ -15,6 +17,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::pages::PageLimits;
+use crate::queries::Queries;
 use crate::test_support::{Days, at, days_ago, flush, minted_on, noon, state_row};
 use crate::tree_lookup::TreeLookupConfig;
 
@@ -32,10 +35,10 @@ fn family(tree: TreeId, day: Day) -> Vec<StateRow> {
 }
 
 fn router_over(days: &Days) -> Router {
-    router(Queries {
+    router(Arc::new(Queries {
         lookup: days.lookup(TreeLookupConfig::default()),
         limits: PageLimits::default(),
-    })
+    }))
 }
 
 async fn get(router: Router, uri: &str) -> (StatusCode, Vec<u8>) {
@@ -173,6 +176,19 @@ async fn an_until_that_is_no_time_is_refused() {
         error,
         "invalid until: \"yesterday\" is not an RFC 3339 time or unix milliseconds"
     );
+}
+
+#[tokio::test]
+async fn an_until_on_no_day_is_refused() {
+    let (days, tree) = one_tree().await;
+
+    let error = refused(
+        router_over(&days),
+        &format!("/v1/trees/{tree}?until=-000001-06-01T00:00:00Z"),
+    )
+    .await;
+
+    assert!(error.contains("is out of the range of days"), "{error}");
 }
 
 #[tokio::test]

@@ -1,0 +1,270 @@
+syntax = "proto3";
+
+package burgess.query.v1;
+
+// Each method streams one row per message and stops after the limit. A
+// lookup continues past a day or a file that it cannot read, thus a stream
+// can also have problems, which tell which rows can be missing.
+service QueryService {
+  // All rows of a tree: states and splits.
+  rpc GetTree(GetTreeRequest) returns (stream GetTreeResponse);
+  // All rows of a flow and of all flows split off below it.
+  rpc GetFlow(GetFlowRequest) returns (stream GetFlowResponse);
+  // The states of one service and category, filtered by meta and payload.
+  rpc ListStates(ListStatesRequest) returns (stream ListStatesResponse);
+  // One row for each reference to a domain id. To get the flows, use
+  // GetTree or GetFlow.
+  rpc ListRefs(ListRefsRequest) returns (stream ListRefsResponse);
+}
+
+// The tree to look up, and which of its rows to send.
+message GetTreeRequest {
+  // The tree, by its id or by the id of one of its flows. It is necessary.
+  oneof tree {
+    // A tree id, 24 hex characters.
+    string tree_id = 1;
+    // A flow id, 32 hex characters. The service uses the tree of this flow
+    // and sends all rows of the tree, not only the rows of this flow. To get
+    // only this flow and the flows below it, use GetFlow.
+    string flow_id = 6;
+  }
+  // The last day to look in, in unix milliseconds. Rows are stored by the
+  // day of the flush, thus the lookup also reads the day after.
+  optional int64 until_ms = 2;
+  // The maximum number of rows. The service has a default and a maximum.
+  // It refuses a limit over the maximum, it does not decrease it.
+  optional uint32 limit = 3;
+  // The order of the rows. Only ORDER_UNSPECIFIED is served at this time.
+  Order order = 4;
+  // The position to continue from. Not served at this time.
+  optional string cursor = 5;
+}
+
+// The flow to look up, and which of its rows to send.
+message GetFlowRequest {
+  // A flow id, 32 hex characters.
+  string flow_id = 1;
+  // Same as in GetTreeRequest.
+  optional int64 until_ms = 2;
+  // Same as in GetTreeRequest.
+  optional uint32 limit = 3;
+  // Same as in GetTreeRequest.
+  Order order = 4;
+  // Same as in GetTreeRequest.
+  optional string cursor = 5;
+}
+
+// The states to look up.
+message ListStatesRequest {
+  // The service that captured the states.
+  string service = 1;
+  // The category of the states.
+  string category = 2;
+  // A filter expression on the payload, for example `amount > 100`.
+  optional string where = 3;
+  // Labels that each state must have, with these values.
+  map<string, string> meta = 4;
+  // The earliest state time, in unix milliseconds. If not set, the window
+  // is the 24 hours before `until_ms`.
+  optional int64 since_ms = 5;
+  // The latest state time, in unix milliseconds. If not set, it is now.
+  optional int64 until_ms = 6;
+  // Same as in GetTreeRequest.
+  optional uint32 limit = 7;
+  // The order of the rows: by state time, or as read.
+  Order order = 8;
+  // Same as in GetTreeRequest.
+  optional string cursor = 9;
+}
+
+// The references to look up.
+message ListRefsRequest {
+  // The type of `domain_id`, for example "order_id".
+  string ref_type = 1;
+  // The id. The comparison is exact and case-sensitive.
+  string domain_id = 2;
+  // Only references that this service recorded.
+  optional string service = 3;
+  // Only references recorded in this category.
+  optional string category = 4;
+  // The earliest reference time, in unix milliseconds. If not set, the
+  // lookup starts at the oldest day kept.
+  optional int64 since_ms = 5;
+  // The latest reference time, in unix milliseconds.
+  optional int64 until_ms = 6;
+  // Same as in GetTreeRequest.
+  optional uint32 limit = 7;
+  // Same as in GetTreeRequest.
+  Order order = 8;
+  // Same as in GetTreeRequest.
+  optional string cursor = 9;
+}
+
+// The order of the rows in an answer.
+enum Order {
+  // The order in which the service reads the rows. This is the fastest.
+  ORDER_UNSPECIFIED = 0;
+  // Oldest first, by the producer clock.
+  ORDER_TS_ASCENDING = 1;
+  // Newest first, by the producer clock.
+  ORDER_TS_DESCENDING = 2;
+}
+
+// One message of the GetTree answer.
+message GetTreeResponse {
+  // Not set only for a message kind that is newer than the client.
+  oneof item {
+    // A row of the tree.
+    TreeRow row = 1;
+    // Data that the lookup could not read.
+    Problem problem = 2;
+    // The last message, when more rows exist than the limit.
+    Truncated truncated = 3;
+  }
+}
+
+// One message of the GetFlow answer.
+message GetFlowResponse {
+  // Same as in GetTreeResponse.
+  oneof item {
+    // A row of the flow or of a flow below it.
+    TreeRow row = 1;
+    // Data that the lookup could not read.
+    Problem problem = 2;
+    // The last message, when more rows exist than the limit.
+    Truncated truncated = 3;
+  }
+}
+
+// One message of the ListStates answer.
+message ListStatesResponse {
+  // Same as in GetTreeResponse.
+  oneof item {
+    // A state that agrees with the request.
+    StateRow row = 1;
+    // Data that the lookup could not read.
+    Problem problem = 2;
+    // The last message, when more states exist than the limit.
+    Truncated truncated = 3;
+  }
+}
+
+// One message of the ListRefs answer.
+message ListRefsResponse {
+  // Same as in GetTreeResponse.
+  oneof item {
+    // A reference to the domain id.
+    RefRow row = 1;
+    // Data that the lookup could not read.
+    Problem problem = 2;
+    // The last message, when more references exist than the limit.
+    Truncated truncated = 3;
+  }
+}
+
+// A row of a tree: a state, or a split that started a child flow. The two
+// kinds are in one message, thus a client reads the rows of a tree as one
+// list, in the order they came.
+message TreeRow {
+  // The flow of the row, 32 hex characters: `tree`, then `subflow`.
+  string flow_id = 1;
+  // The tree of the flow, 24 hex characters.
+  string tree = 2;
+  // The number of the flow in its tree. The root is 0.
+  uint32 subflow = 3;
+  // The time by the producer clock, in unix milliseconds.
+  int64 ts_ms = 4;
+  // The service that captured the state or did the split.
+  string service = 5;
+  // The category of the state or of the split.
+  string category = 6;
+  // Not set only for a row kind that is newer than the client. The client
+  // reads the row and does not fail the full answer.
+  oneof entry {
+    // A state that the flow captured.
+    State state = 10;
+    // A split, stored under the parent flow that did it.
+    Split split = 11;
+  }
+}
+
+// The data of a state row in a tree.
+message State {
+  // The labels that lookups can filter on.
+  map<string, string> meta = 1;
+  // The encoding of the stored payload.
+  PayloadType payload_type = 2;
+  // The payload as JSON text. Not set when the stored payload is not
+  // valid JSON or has no type. Then the answer has a problem that tells why.
+  optional string payload = 3;
+}
+
+// The data of a split row.
+message Split {
+  // The child flow that the split started, in the same tree.
+  uint32 child_subflow = 1;
+}
+
+// A state found by ListStates.
+message StateRow {
+  // Same as in TreeRow.
+  string flow_id = 1;
+  // Same as in TreeRow.
+  string tree = 2;
+  // Same as in TreeRow.
+  uint32 subflow = 3;
+  // Same as in TreeRow.
+  int64 ts_ms = 4;
+  // The service that captured the state.
+  string service = 5;
+  // The category of the state.
+  string category = 6;
+  // Same as in State.
+  map<string, string> meta = 7;
+  // Same as in State.
+  PayloadType payload_type = 8;
+  // Same as in State.
+  optional string payload = 9;
+}
+
+// The encoding of a state payload.
+enum PayloadType {
+  // No type was stored with the payload.
+  PAYLOAD_TYPE_UNSPECIFIED = 0;
+  // A JSON document.
+  PAYLOAD_TYPE_JSON = 1;
+}
+
+// A reference from a flow to an id from outside Burgess.
+message RefRow {
+  // The type of `domain_id`.
+  string ref_type = 1;
+  // The id.
+  string domain_id = 2;
+  // The service that recorded the reference.
+  string service = 3;
+  // The category of the reference, if the producer gave one.
+  optional string category = 4;
+  // The flow that recorded the reference, 32 hex characters.
+  string flow_id = 5;
+  // The tree of the flow, 24 hex characters.
+  string tree = 6;
+  // The number of the flow in its tree.
+  uint32 subflow = 7;
+  // The time by the producer clock, in unix milliseconds.
+  int64 ts_ms = 8;
+}
+
+// Data that the lookup could not read, for example a manifest, a file or a
+// payload. The rows that came are correct. This tells which can be missing.
+message Problem {
+  // The cause, as text to show to a person.
+  string message = 1;
+}
+
+// The last message when more rows exist than the limit.
+//
+// This is temporary, until answers have cursors: a message with a cursor
+// will tell the same. Then reserve the field number of `truncated`. Do not
+// use it again.
+message Truncated {}

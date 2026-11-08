@@ -12,6 +12,10 @@ pub mod tree_lookup;
 
 pub mod pages;
 
+pub mod queries;
+
+pub mod grpc;
+
 pub mod rest;
 
 pub mod config;

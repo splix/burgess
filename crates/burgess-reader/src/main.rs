@@ -1,7 +1,8 @@
 //! `burgess-reader`, the query service. The `burgess_reader` library explains
 //! how it answers lookups.
 //!
-//! Usage: `burgess-reader [--config <file.toml>]`. Every setting may also
+//! Usage: `burgess-reader [--config <file.toml>]`. The API is served on the
+//! `listen` address, gRPC and REST alike. Every setting may also
 //! come from `BURGESS_READER__*` environment variables; logging follows
 //! `RUST_LOG` (default `info`).
 //!
