@@ -6,20 +6,18 @@ use std::sync::Arc;
 use burgess_api::grpc::get_tree_request::Tree;
 use burgess_api::grpc::query_service_server::QueryService;
 use burgess_api::grpc::{
-    GetFlowRequest, GetTreeRequest, ListRefsRequest, ListStatesRequest, Order, get_flow_response,
-    get_tree_response::Item, list_refs_response,
+    GetFlowRequest, GetTreeRequest, ListRefsRequest, ListStatesRequest, Order, PayloadType,
+    get_flow_response, get_tree_response::Item, list_refs_response, list_states_response,
 };
 use burgess_api::{Row, RowKind};
 use burgess_core::flow::{FlowId, Subflow, TreeId};
-use burgess_core::storage::{Day, ObjectName, RefRow, StateRow};
+use burgess_core::storage::{Day, ObjectName, RefRow, StateEntry, StateRow};
 use burgess_core::wire::UnixMillis;
+use jiff::{SignedDuration, Timestamp};
 use tonic::{Code, Request, Status};
 
 use super::*;
-use crate::pages::PageLimits;
-use crate::refs_lookup::RefsLookupConfig;
 use crate::test_support::{Days, at, days_ago, flush, messages, minted_on, noon, state_row};
-use crate::tree_lookup::TreeLookupConfig;
 
 /// A tree of four flows written on `day`: the root splits off 1 and 4, and
 /// 1 splits off 2.
@@ -44,11 +42,7 @@ async fn one_tree() -> (Days, TreeId) {
 }
 
 fn api(days: &Days) -> QueryApi {
-    QueryApi::new(Arc::new(Queries {
-        lookup: days.lookup(TreeLookupConfig::default()),
-        refs: days.refs_lookup(RefsLookupConfig::default()),
-        limits: PageLimits::default(),
-    }))
+    QueryApi::new(Arc::new(days.queries()))
 }
 
 fn tree_request(tree: TreeId) -> GetTreeRequest {
@@ -382,16 +376,284 @@ async fn what_the_lookup_could_not_read_comes_before_the_rows() {
     assert_eq!(rows(&items).len(), 6);
 }
 
-#[tokio::test]
-async fn states_are_not_served_yet() {
-    let days = Days::new();
+/// A request for the states that [`state_row`] makes.
+fn states_request() -> ListStatesRequest {
+    ListStatesRequest {
+        service: "checkout".into(),
+        category: "step".into(),
+        ..Default::default()
+    }
+}
 
-    let states = api(&days)
-        .list_states(Request::new(ListStatesRequest::default()))
+async fn states(days: &Days, request: ListStatesRequest) -> Vec<list_states_response::Item> {
+    let answer = api(days).list_states(Request::new(request)).await;
+    messages(answer)
         .await
-        .expect_err("a refusal");
+        .into_iter()
+        .map(|message| message.item.expect("an item"))
+        .collect()
+}
 
-    assert_eq!(states.code(), Code::Unimplemented);
+/// `ago` before now, as a time and as unix milliseconds.
+fn before_now(ago: SignedDuration) -> (Timestamp, u64) {
+    let time = Timestamp::now() - ago;
+    (time, time.as_millisecond() as u64)
+}
+
+/// Stores `rows` as one flush on the day of their first time.
+async fn put_states(days: &Days, rows: Vec<StateRow>) {
+    let day = Day::utc(rows[0].time.saturating_timestamp()).unwrap();
+    days.put(day, &[&flush(vec![rows])]).await;
+}
+
+/// The time of each state row of `items`.
+fn state_times(items: &[list_states_response::Item]) -> Vec<i64> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            list_states_response::Item::Row(row) => Some(row.ts_ms),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn states_answer_with_a_message_per_state() {
+    let (_, ms) = before_now(SignedDuration::from_hours(1));
+    let tree = minted_on(days_ago(0), 5);
+    let mut row = state_row(tree, 2, ms, None);
+    if let StateEntry::State { meta, payload, .. } = &mut row.entry {
+        *meta = [("region".to_string(), "eu".to_string())].into();
+        *payload = br#" {"amount": 10} "#.to_vec();
+    }
+    let days = Days::new();
+    put_states(&days, vec![row, state_row(tree, 2, ms + 1, Some(3))]).await;
+
+    let items = states(&days, states_request()).await;
+
+    assert_eq!(
+        items,
+        [list_states_response::Item::Row(
+            burgess_api::grpc::StateRow {
+                flow_id: FlowId::new(tree, Subflow::from(2)).to_string(),
+                tree: tree.to_string(),
+                subflow: 2,
+                ts_ms: ms as i64,
+                service: "checkout".into(),
+                category: "step".into(),
+                meta: [("region".to_string(), "eu".to_string())].into(),
+                payload_type: PayloadType::Json as i32,
+                payload: Some(r#"{"amount": 10}"#.into()),
+            }
+        )],
+        "the split is not a state"
+    );
+}
+
+#[tokio::test]
+async fn without_since_the_window_is_the_day_before_until() {
+    let tree = minted_on(days_ago(0), 5);
+    let (_, recent) = before_now(SignedDuration::from_hours(1));
+    let (_, old) = before_now(SignedDuration::from_hours(25));
+    let days = Days::new();
+    put_states(&days, vec![state_row(tree, 0, recent, None)]).await;
+    put_states(&days, vec![state_row(tree, 1, old, None)]).await;
+
+    let default = states(&days, states_request()).await;
+    let longer = states(
+        &days,
+        ListStatesRequest {
+            since_ms: Some(before_now(SignedDuration::from_hours(26)).1 as i64),
+            ..states_request()
+        },
+    )
+    .await;
+    let ending_earlier = states(
+        &days,
+        ListStatesRequest {
+            until_ms: Some(before_now(SignedDuration::from_hours(2)).1 as i64),
+            ..states_request()
+        },
+    )
+    .await;
+
+    assert_eq!(state_times(&default), [recent as i64]);
+    assert_eq!(state_times(&longer), [recent as i64, old as i64]);
+    assert_eq!(state_times(&ending_earlier), [old as i64]);
+}
+
+#[tokio::test]
+async fn a_payload_that_is_not_json_comes_with_a_problem_before_its_state() {
+    let (_, ms) = before_now(SignedDuration::from_hours(1));
+    let mut row = state_row(minted_on(days_ago(0), 5), 0, ms, None);
+    if let StateEntry::State { payload, .. } = &mut row.entry {
+        *payload = b"not json".to_vec();
+    }
+    let days = Days::new();
+    put_states(&days, vec![row]).await;
+
+    let items = states(&days, states_request()).await;
+
+    let [
+        list_states_response::Item::Problem(problem),
+        list_states_response::Item::Row(row),
+    ] = items.as_slice()
+    else {
+        panic!("a problem, then a row: {items:?}");
+    };
+    assert!(problem.message.contains("is not valid JSON"), "{problem:?}");
+    assert_eq!(row.payload, None);
+}
+
+#[tokio::test]
+async fn a_limit_ends_the_states_with_a_message_that_tells_they_were_cut() {
+    let (_, ms) = before_now(SignedDuration::from_hours(1));
+    let tree = minted_on(days_ago(0), 5);
+    let days = Days::new();
+    put_states(
+        &days,
+        (0..3).map(|i| state_row(tree, i, ms, None)).collect(),
+    )
+    .await;
+
+    let items = states(
+        &days,
+        ListStatesRequest {
+            limit: Some(2),
+            ..states_request()
+        },
+    )
+    .await;
+
+    assert_eq!(state_times(&items).len(), 2);
+    assert!(
+        matches!(items.last(), Some(list_states_response::Item::Truncated(_))),
+        "{items:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_where_is_no_filter() {
+    let (_, ms) = before_now(SignedDuration::from_hours(1));
+    let days = Days::new();
+    put_states(
+        &days,
+        vec![state_row(minted_on(days_ago(0), 5), 0, ms, None)],
+    )
+    .await;
+
+    let items = states(
+        &days,
+        ListStatesRequest {
+            r#where: Some(String::new()),
+            cursor: Some(String::new()),
+            ..states_request()
+        },
+    )
+    .await;
+
+    assert_eq!(state_times(&items), [ms as i64]);
+}
+
+#[tokio::test]
+async fn a_states_request_the_service_cannot_serve_is_refused() {
+    let days = Days::new();
+    let cases = [
+        (
+            ListStatesRequest {
+                service: String::new(),
+                ..states_request()
+            },
+            "service is necessary",
+        ),
+        (
+            ListStatesRequest {
+                category: String::new(),
+                ..states_request()
+            },
+            "category is necessary",
+        ),
+        (
+            ListStatesRequest {
+                r#where: Some("amount > 100".into()),
+                ..states_request()
+            },
+            "where is not served yet",
+        ),
+        (
+            ListStatesRequest {
+                since_ms: Some(2_000),
+                until_ms: Some(1_000),
+                ..states_request()
+            },
+            "is after until",
+        ),
+        (
+            ListStatesRequest {
+                until_ms: Some(i64::MIN),
+                ..states_request()
+            },
+            "until_ms -9223372036854775808 is out of the range of times",
+        ),
+        (
+            ListStatesRequest {
+                order: Order::TsAscending as i32,
+                ..states_request()
+            },
+            "order is not served yet",
+        ),
+        (
+            ListStatesRequest {
+                cursor: Some("next".into()),
+                ..states_request()
+            },
+            "cursors are not served yet",
+        ),
+        (
+            ListStatesRequest {
+                limit: Some(0),
+                ..states_request()
+            },
+            "limit must be at least 1",
+        ),
+    ];
+    for (request, expected) in cases {
+        let error = refused(api(&days).list_states(Request::new(request.clone())).await);
+        assert!(error.contains(expected), "{request:?}: {error}");
+    }
+    assert!(
+        days.store.requests().is_empty(),
+        "a refused request reads nothing"
+    );
+}
+
+#[tokio::test]
+async fn what_the_states_lookup_could_not_read_comes_before_the_states() {
+    let (_, ms) = before_now(SignedDuration::from_hours(1));
+    let days = Days::new();
+    put_states(
+        &days,
+        vec![state_row(minted_on(days_ago(0), 5), 0, ms, None)],
+    )
+    .await;
+    days.put_object(
+        &ObjectName::Manifest { day: days_ago(-1) },
+        b"not a manifest".to_vec(),
+    )
+    .await;
+
+    let items = states(&days, states_request()).await;
+
+    assert!(
+        matches!(
+            items.as_slice(),
+            [
+                list_states_response::Item::Problem(_),
+                list_states_response::Item::Row(_),
+            ]
+        ),
+        "{items:?}"
+    );
 }
 
 fn reference(domain_id: &str, tree: TreeId, subflow: u32, day: Day, offset: u64) -> RefRow {

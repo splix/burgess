@@ -1,7 +1,7 @@
 //! Why part of a tree lookup failed.
 
 use crate::manifests::ManifestReadError;
-use crate::states_file::TreeReadError;
+use crate::states_file::StatesReadError;
 
 /// Why part of a tree lookup failed. Each names the day or file it failed
 /// on.
@@ -12,5 +12,5 @@ pub enum TreeLookupError {
     Manifest(#[from] ManifestReadError),
     /// A states file could not be read.
     #[error(transparent)]
-    File(#[from] TreeReadError),
+    File(#[from] StatesReadError),
 }

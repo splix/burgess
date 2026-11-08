@@ -26,6 +26,7 @@ use crate::manifests::ManifestCacheConfig;
 use crate::pages::{PageLimits, PageLimitsError};
 use crate::parquet_file::FileReadConfig;
 use crate::refs_lookup::RefsLookupConfig;
+use crate::states_lookup::StatesLookupConfig;
 use crate::tree_lookup::TreeLookupConfig;
 
 /// Prefix of the environment variables that override settings.
@@ -49,6 +50,9 @@ pub struct Settings {
     /// How refs lookups walk. `lookup.concurrent_files` and
     /// `lookup.days_before` apply to the two lookups.
     pub refs: RefsLookupConfig,
+    /// How states lookups walk. `lookup.concurrent_files` and
+    /// `lookup.days_before` apply to them too.
+    pub states: StatesLookupConfig,
 }
 
 /// Why the settings cannot be used.

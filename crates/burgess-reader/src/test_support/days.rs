@@ -16,10 +16,13 @@ use object_store::{ObjectStore, ObjectStoreExt};
 
 use super::RecordingStore;
 use crate::manifests::{ManifestCache, ManifestCacheConfig};
+use crate::pages::PageLimits;
 use crate::parquet_file::FileReadConfig;
+use crate::queries::Queries;
 use crate::refs_file::RefsFileReader;
 use crate::refs_lookup::{RefsLookup, RefsLookupConfig};
 use crate::states_file::StatesFileReader;
+use crate::states_lookup::{StatesLookup, StatesLookupConfig};
 use crate::tree_lookup::{TreeLookup, TreeLookupConfig};
 
 pub(crate) fn noon(day: Day) -> Timestamp {
@@ -103,6 +106,24 @@ impl Days {
         let manifests = ManifestCache::new(self.store.clone(), ManifestCacheConfig::default());
         let files = RefsFileReader::new(self.store.clone(), FileReadConfig::default());
         RefsLookup::new(Arc::new(manifests), files, config)
+    }
+
+    /// A states lookup over the stored days, with default settings for the
+    /// manifests and the files.
+    pub(crate) fn states_lookup(&self, config: StatesLookupConfig) -> StatesLookup {
+        let manifests = ManifestCache::new(self.store.clone(), ManifestCacheConfig::default());
+        let files = StatesFileReader::new(self.store.clone(), FileReadConfig::default());
+        StatesLookup::new(Arc::new(manifests), files, config)
+    }
+
+    /// The queries over the stored days, with default settings.
+    pub(crate) fn queries(&self) -> Queries {
+        Queries {
+            lookup: self.lookup(TreeLookupConfig::default()),
+            refs: self.refs_lookup(RefsLookupConfig::default()),
+            states: self.states_lookup(StatesLookupConfig::default()),
+            limits: PageLimits::default(),
+        }
     }
 
     /// The days whose manifest was requested, in request order.

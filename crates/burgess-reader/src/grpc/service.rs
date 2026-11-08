@@ -52,9 +52,9 @@ impl QueryService for QueryApi {
 
     async fn list_states(
         &self,
-        _request: Request<ListStatesRequest>,
+        request: Request<ListStatesRequest>,
     ) -> Result<Response<Self::ListStatesStream>, Status> {
-        Err(Status::unimplemented("ListStates is not served yet"))
+        answer(self.queries.list_states(request.into_inner()).await)
     }
 
     async fn list_refs(

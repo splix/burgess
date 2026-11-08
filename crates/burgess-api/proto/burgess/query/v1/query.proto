@@ -56,11 +56,13 @@ message GetFlowRequest {
 
 // The states to look up.
 message ListStatesRequest {
-  // The service that captured the states.
+  // The service that captured the states. Necessary. The comparison is
+  // exact.
   string service = 1;
-  // The category of the states.
+  // The category of the states. Necessary. The comparison is exact.
   string category = 2;
-  // A filter expression on the payload, for example `amount > 100`.
+  // A filter expression on the payload, for example `amount > 100`. Not
+  // served at this time.
   optional string where = 3;
   // Labels that each state must have, with these values.
   map<string, string> meta = 4;
@@ -68,10 +70,14 @@ message ListStatesRequest {
   // is the 24 hours before `until_ms`.
   optional int64 since_ms = 5;
   // The latest state time, in unix milliseconds. If not set, it is now.
+  // States are stored by the day of the flush, thus the lookup also reads
+  // the day after. A state that the writer stored two or more days after
+  // its time is not found.
   optional int64 until_ms = 6;
   // Same as in GetTreeRequest.
   optional uint32 limit = 7;
-  // The order of the rows: by state time, or as read.
+  // The order of the rows: by state time, or as read. Only
+  // ORDER_UNSPECIFIED is served at this time.
   Order order = 8;
   // Same as in GetTreeRequest.
   optional string cursor = 9;

@@ -12,7 +12,11 @@ pub mod states_file;
 
 pub mod refs_file;
 
+pub mod day_scan;
+
 pub mod refs_lookup;
+
+pub mod states_lookup;
 
 pub mod tree_lookup;
 

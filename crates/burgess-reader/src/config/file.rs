@@ -12,6 +12,7 @@ use crate::manifests::ManifestCacheConfig;
 use crate::pages::PageLimits;
 use crate::parquet_file::FileReadConfig;
 use crate::refs_lookup::RefsLookupConfig;
+use crate::states_lookup::StatesLookupConfig;
 use crate::tree_lookup::TreeLookupConfig;
 
 /// The whole file. Unknown keys are errors, so a misspelled setting is
@@ -31,6 +32,8 @@ pub(super) struct FileConfig {
     lookup: LookupSection,
     #[serde(default)]
     refs: RefsSection,
+    #[serde(default)]
+    states: StatesSection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +71,12 @@ struct LookupSection {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 struct RefsSection {
+    concurrent_days: NonZeroUsize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct StatesSection {
     concurrent_days: NonZeroUsize,
 }
 
@@ -122,6 +131,14 @@ impl Default for RefsSection {
     }
 }
 
+impl Default for StatesSection {
+    fn default() -> Self {
+        StatesSection {
+            concurrent_days: StatesLookupConfig::default().concurrent_days,
+        }
+    }
+}
+
 impl TryFrom<FileConfig> for Settings {
     type Error = ConfigError;
 
@@ -150,6 +167,11 @@ impl TryFrom<FileConfig> for Settings {
             },
             refs: RefsLookupConfig {
                 concurrent_days: file.refs.concurrent_days,
+                concurrent_files: file.lookup.concurrent_files,
+                days_before: file.lookup.days_before,
+            },
+            states: StatesLookupConfig {
+                concurrent_days: file.states.concurrent_days,
                 concurrent_files: file.lookup.concurrent_files,
                 days_before: file.lookup.days_before,
             },

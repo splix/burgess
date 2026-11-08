@@ -3,12 +3,13 @@
 //! The two transports answer through here. gRPC sends the messages as they
 //! are. REST reads its request into the same request message and makes its
 //! JSON page from the same messages. Thus the two transports give the same
-//! rows, limits, problems and errors. REST has no route for ListRefs yet,
-//! thus it is served over gRPC only.
+//! rows, limits, problems and errors. REST has no route for ListRefs and
+//! ListStates yet, thus they are served over gRPC only.
 
 mod error;
 mod options;
 mod refs;
+mod states;
 
 pub use error::{RequestError, TimeField};
 
@@ -25,6 +26,7 @@ use burgess_core::report::error_chain;
 use self::options::{PageOptions, PageRequest};
 use crate::pages::PageLimits;
 use crate::refs_lookup::RefsLookup;
+use crate::states_lookup::StatesLookup;
 use crate::tree_lookup::{FoundTree, TreeLookup};
 
 /// The data that the API answers from.
@@ -33,6 +35,8 @@ pub struct Queries {
     pub lookup: TreeLookup,
     /// Finds the references to outside ids.
     pub refs: RefsLookup,
+    /// Finds the states of a service and category.
+    pub states: StatesLookup,
     /// The number of rows that a page can hold.
     pub limits: PageLimits,
 }
@@ -77,4 +81,10 @@ fn log_problems(problems: &[impl Error + 'static], lookup: impl Display) {
     for problem in problems {
         tracing::warn!(%lookup, problem = %error_chain(problem), "lookup could not read everything");
     }
+}
+
+/// `value`, or `None` when it is "". A client that keeps an option in a
+/// string sends "" for no value.
+fn non_empty<S: AsRef<str>>(value: Option<S>) -> Option<S> {
+    value.filter(|value| !value.as_ref().is_empty())
 }

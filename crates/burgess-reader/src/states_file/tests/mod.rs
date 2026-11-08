@@ -159,7 +159,7 @@ impl Fixture {
         &self,
         config: FileReadConfig,
         tree: TreeId,
-    ) -> Result<Vec<StateRow>, TreeReadError> {
+    ) -> Result<Vec<StateRow>, StatesReadError> {
         StatesFileReader::new(self.store.clone(), config)
             .tree(&self.name, self.stats(), tree)
             .await
@@ -169,7 +169,7 @@ impl Fixture {
         self.read_with(self.tail_only_config(), tree).await.unwrap()
     }
 
-    async fn error(&self, tree: TreeId) -> TreeReadError {
+    async fn error(&self, tree: TreeId) -> StatesReadError {
         let error = self
             .read_with(FileReadConfig::default(), tree)
             .await
@@ -677,3 +677,5 @@ async fn rejects_a_file_without_the_tree_column() {
         StatesFileProblem::File(FileProblem::Column { column: "tree" })
     ));
 }
+
+mod scan;

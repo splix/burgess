@@ -1,4 +1,4 @@
-//! Why a tree could not be read from a states file.
+//! Why states could not be read from a states file.
 
 use burgess_core::flow::Subflow;
 use burgess_core::storage::ObjectName;
@@ -7,18 +7,18 @@ use parquet::errors::ParquetError;
 use super::decode::InvalidRow;
 use crate::parquet_file::FileProblem;
 
-/// Why a tree could not be read from a states file.
+/// Why states could not be read from a states file.
 #[derive(Debug, thiserror::Error)]
-#[error("reading a tree from {file} failed")]
-pub struct TreeReadError {
+#[error("reading states from {file} failed")]
+pub struct StatesReadError {
     file: ObjectName,
     #[source]
     problem: StatesFileProblem,
 }
 
-impl TreeReadError {
+impl StatesReadError {
     pub(super) fn new(file: &ObjectName, problem: impl Into<StatesFileProblem>) -> Self {
-        TreeReadError {
+        StatesReadError {
             file: file.clone(),
             problem: problem.into(),
         }

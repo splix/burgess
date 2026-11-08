@@ -1,5 +1,7 @@
-//! Reading the rows of one tree from one states file.
+//! Reading the rows of one tree, or the states that pass a filter, from one
+//! states file.
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use burgess_core::flow::TreeId;
@@ -10,10 +12,13 @@ use parquet::arrow::arrow_reader::ArrowReaderMetadata;
 use parquet::basic::Type as PhysicalType;
 
 use super::decode::StatesBatch;
-use super::error::{StatesFileProblem, TreeReadError};
-use crate::parquet_file::{ColumnKey, FileReadConfig, leaf_column, open_selected};
+use super::error::{StatesFileProblem, StatesReadError};
+use super::filter::StatesFilter;
+use super::stored_state::StoredState;
+use crate::parquet_file::{ColumnKey, FileProblem, FileReadConfig, OpenFile, leaf_column};
 
-/// Reads trees out of states files, one file at a time.
+/// Reads the rows of a tree, or the states that pass a filter, out of
+/// states files, one file at a time.
 ///
 /// It is told the file size by the manifest rather than asking the store,
 /// so the footer comes with the first request and no file is ever listed or
@@ -43,10 +48,28 @@ impl StatesFileReader {
         file: &ObjectName,
         stats: FileStats,
         tree: TreeId,
-    ) -> Result<Vec<StateRow>, TreeReadError> {
+    ) -> Result<Vec<StateRow>, StatesReadError> {
         self.read(file, stats, tree)
             .await
-            .map_err(|problem| TreeReadError::new(file, problem))
+            .map_err(|problem| StatesReadError::new(file, problem))
+    }
+
+    /// The states of `file`, which the manifest lists with `stats`, that
+    /// pass `filter`, in the order the file stores them, up to `limit`.
+    ///
+    /// Splits are not states, thus they are never kept. The payload pages
+    /// are fetched only where a row passes. The read stops at `limit`
+    /// states, thus a file of many states costs no more than the page needs.
+    pub async fn states(
+        &self,
+        file: &ObjectName,
+        stats: FileStats,
+        filter: &Arc<StatesFilter>,
+        limit: NonZeroUsize,
+    ) -> Result<Vec<StoredState>, StatesReadError> {
+        self.scan(file, stats, filter, limit)
+            .await
+            .map_err(|problem| StatesReadError::new(file, problem))
     }
 
     async fn read(
@@ -55,21 +78,12 @@ impl StatesFileReader {
         stats: FileStats,
         tree: TreeId,
     ) -> Result<Vec<StateRow>, StatesFileProblem> {
-        let keys = |metadata: &ArrowReaderMetadata| {
-            let column = leaf_column(
-                metadata,
-                StatesColumn::Tree.name(),
-                PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                Some(TreeId::LEN),
-            )?;
-            Ok(vec![ColumnKey {
-                column,
-                value: tree.as_bytes(),
-            }])
-        };
-        let store = Arc::clone(&self.store);
-        let tail_bytes = self.config.tail_bytes.get();
-        let Some(mut batches) = open_selected(store, file, stats, tail_bytes, keys).await? else {
+        let open = self.open(file, stats).await?;
+        let keys = [ColumnKey {
+            column: tree_column(open.metadata())?,
+            value: tree.as_bytes(),
+        }];
+        let Some(mut batches) = open.select(&keys)? else {
             return Ok(Vec::new());
         };
         let mut rows = Vec::new();
@@ -78,4 +92,39 @@ impl StatesFileReader {
         }
         Ok(rows)
     }
+
+    async fn scan(
+        &self,
+        file: &ObjectName,
+        stats: FileStats,
+        filter: &Arc<StatesFilter>,
+        limit: NonZeroUsize,
+    ) -> Result<Vec<StoredState>, StatesFileProblem> {
+        let open = self.open(file, stats).await?;
+        // Checked before any row passes, as a tree read checks it.
+        tree_column(open.metadata())?;
+        let row_filter = filter.row_filter(open.metadata())?;
+        let mut batches = open.filter(row_filter, limit)?;
+        let mut states = Vec::new();
+        while let Some(batch) = batches.try_next().await? {
+            states.extend(StatesBatch::try_from(&batch)?.states()?);
+        }
+        Ok(states)
+    }
+
+    async fn open(&self, file: &ObjectName, stats: FileStats) -> Result<OpenFile, FileProblem> {
+        let store = Arc::clone(&self.store);
+        OpenFile::open(store, file, stats, self.config.tail_bytes.get()).await
+    }
+}
+
+/// The leaf index of the tree column, which must have the width of a tree
+/// id.
+fn tree_column(metadata: &ArrowReaderMetadata) -> Result<usize, FileProblem> {
+    leaf_column(
+        metadata,
+        StatesColumn::Tree.name(),
+        PhysicalType::FIXED_LEN_BYTE_ARRAY,
+        Some(TreeId::LEN),
+    )
 }

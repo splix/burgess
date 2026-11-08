@@ -20,6 +20,12 @@ pub enum RequestError {
     /// A GetTree request has no `tree_id` and no `flow_id`.
     #[error("tree_id or flow_id is necessary")]
     NoTree,
+    /// A ListStates request has no `service`.
+    #[error("service is necessary")]
+    NoService,
+    /// A ListStates request has no `category`.
+    #[error("category is necessary")]
+    NoCategory,
     /// The outside id breaks the rules of a reference, thus the writer
     /// never stores it.
     #[error("invalid reference")]
@@ -62,6 +68,11 @@ pub enum RequestError {
     /// not ignore it, thus the caller does not think the rows are sorted.
     #[error("order is not served yet; do not set it to get the rows in the order they are read")]
     Order,
+    /// The service does not filter on the payload yet. It refuses the
+    /// filter and does not ignore it, thus the caller does not think that
+    /// the states pass it.
+    #[error("where is not served yet")]
+    Where,
     /// No answer gives a cursor yet.
     #[error("cursors are not served yet")]
     Cursor,

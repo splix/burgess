@@ -1,11 +1,14 @@
 //! A stored row as a gRPC row.
 
 use burgess_api::grpc::tree_row::Entry;
-use burgess_api::grpc::{PayloadType, Split, State, TreeRow};
+use burgess_api::grpc::{self, PayloadType, Split, State, TreeRow};
 use burgess_core::flow::FlowId;
 use burgess_core::storage::{StateEntry, StateRow};
 use burgess_core::wire;
+use jiff::Timestamp;
 use serde_json::value::RawValue;
+
+use crate::states_file::StoredState;
 
 /// `row` as a gRPC row, and why its payload was removed, if it was.
 pub(super) fn tree_row(row: StateRow) -> (TreeRow, Option<String>) {
@@ -20,23 +23,12 @@ pub(super) fn tree_row(row: StateRow) -> (TreeRow, Option<String>) {
             payload_type,
             payload,
         } => {
-            let (payload_type, payload) = match payload_type {
-                wire::PayloadType::Json => (PayloadType::Json, json(payload)),
-                wire::PayloadType::Unspecified => {
-                    (PayloadType::Unspecified, Err(PayloadProblem::NoType))
-                }
-            };
-            let payload = match payload {
-                Ok(payload) => Some(payload),
-                Err(cause) => {
-                    problem = Some(format!("the payload of {flow_id} at {ts} {cause}"));
-                    None
-                }
-            };
+            let payload = RowPayload::new(flow_id, ts, payload_type, payload);
+            problem = payload.problem;
             Entry::State(State {
                 meta,
-                payload_type: payload_type as i32,
-                payload,
+                payload_type: payload.payload_type as i32,
+                payload: payload.payload,
             })
         }
         StateEntry::Split { child } => Entry::Split(Split {
@@ -53,6 +45,64 @@ pub(super) fn tree_row(row: StateRow) -> (TreeRow, Option<String>) {
         entry: Some(entry),
     };
     (row, problem)
+}
+
+/// `state` as a gRPC row, and why its payload was removed, if it was.
+pub(super) fn state_row(state: StoredState) -> (grpc::StateRow, Option<String>) {
+    let flow_id = FlowId::new(state.tree, state.subflow);
+    // As for a tree row, all stored times fit.
+    let ts = state.time.saturating_timestamp();
+    let payload = RowPayload::new(flow_id, ts, state.payload_type, state.payload);
+    let row = grpc::StateRow {
+        flow_id: flow_id.to_string(),
+        tree: state.tree.to_string(),
+        subflow: u32::from(state.subflow),
+        ts_ms: ts.as_millisecond(),
+        service: state.service,
+        category: state.category,
+        meta: state.meta,
+        payload_type: payload.payload_type as i32,
+        payload: payload.payload,
+    };
+    (row, payload.problem)
+}
+
+/// A stored payload as a row sends it.
+struct RowPayload {
+    payload_type: PayloadType,
+    /// `None` when the payload cannot be sent.
+    payload: Option<String>,
+    /// Why the payload is not sent, as text to show to a person.
+    problem: Option<String>,
+}
+
+impl RowPayload {
+    /// The payload of the state of `flow_id` at `ts`.
+    fn new(
+        flow_id: FlowId,
+        ts: Timestamp,
+        payload_type: wire::PayloadType,
+        payload: Vec<u8>,
+    ) -> Self {
+        let (payload_type, payload) = match payload_type {
+            wire::PayloadType::Json => (PayloadType::Json, json(payload)),
+            wire::PayloadType::Unspecified => {
+                (PayloadType::Unspecified, Err(PayloadProblem::NoType))
+            }
+        };
+        match payload {
+            Ok(payload) => RowPayload {
+                payload_type,
+                payload: Some(payload),
+                problem: None,
+            },
+            Err(cause) => RowPayload {
+                payload_type,
+                payload: None,
+                problem: Some(format!("the payload of {flow_id} at {ts} {cause}")),
+            },
+        }
+    }
 }
 
 /// Why a payload cannot be in its row.

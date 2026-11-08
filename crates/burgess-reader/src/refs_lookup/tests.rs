@@ -11,7 +11,7 @@ use object_store::ObjectStoreExt;
 
 use super::*;
 use crate::refs_file::RefKey;
-use crate::test_support::{Days, at, days_ago, minted_on, noon};
+use crate::test_support::{Days, around, at, days_ago, minted_on, noon};
 
 /// A reference to `domain_id` from subflow `subflow` of `tree`, `offset`
 /// milliseconds after noon of `day`.
@@ -271,15 +271,6 @@ async fn the_walk_stops_when_it_has_the_rows_wanted() {
         [new.to_string()],
         "no file of an older day is read"
     );
-}
-
-/// Runs `walk`, and gives the value of `day` from before and from after
-/// it. A test that crosses midnight UTC sees two different days, and either
-/// one is correct.
-async fn around<T>(day: impl Fn() -> T, walk: impl Future<Output = ()>) -> [T; 2] {
-    let before = day();
-    walk.await;
-    [before, day()]
 }
 
 #[tokio::test]

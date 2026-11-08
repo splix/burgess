@@ -12,7 +12,7 @@ use super::config::TreeLookupConfig;
 use super::found::FoundTree;
 use super::walk::{DayOutcome, DayWalk, WalkRange};
 use crate::manifests::ManifestCache;
-use crate::states_file::{StatesFileReader, TreeReadError};
+use crate::states_file::{StatesFileReader, StatesReadError};
 
 /// Finds every row of a tree, or of a flow and the flows below it, across
 /// the days they were written on.
@@ -138,7 +138,7 @@ impl TreeLookup {
         &self,
         candidates: Vec<(ObjectName, FileStats)>,
         tree: TreeId,
-    ) -> Vec<Result<Vec<StateRow>, TreeReadError>> {
+    ) -> Vec<Result<Vec<StateRow>, StatesReadError>> {
         futures::stream::iter(candidates)
             .map(|(file, stats)| async move { self.files.tree(&file, stats, tree).await })
             .buffered(self.config.concurrent_files.get())

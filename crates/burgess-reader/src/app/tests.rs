@@ -5,7 +5,7 @@ use std::path::Path;
 
 use burgess_api::grpc::get_tree_request::Tree;
 use burgess_api::grpc::query_service_client::QueryServiceClient;
-use burgess_api::grpc::{GetTreeRequest, ListRefsRequest};
+use burgess_api::grpc::{GetTreeRequest, ListRefsRequest, ListStatesRequest};
 use burgess_api::{ErrorBody, Page};
 use burgess_store::StoreConfig;
 use futures::TryStreamExt;
@@ -19,6 +19,7 @@ use crate::manifests::ManifestCacheConfig;
 use crate::pages::PageLimits;
 use crate::parquet_file::FileReadConfig;
 use crate::refs_lookup::RefsLookupConfig;
+use crate::states_lookup::StatesLookupConfig;
 use crate::test_support::{at, days_ago, flush, minted_on, put_day, state_row};
 use crate::tree_lookup::TreeLookupConfig;
 
@@ -33,6 +34,7 @@ fn settings(store: &Path) -> Settings {
         files: FileReadConfig::default(),
         lookup: TreeLookupConfig::default(),
         refs: RefsLookupConfig::default(),
+        states: StatesLookupConfig::default(),
     }
 }
 
@@ -97,6 +99,18 @@ async fn answers_lookups_over_files_in_a_local_directory() {
         .expect("ListRefs on the same port");
     let refs: Vec<_> = refs.into_inner().try_collect().await.unwrap();
     assert!(refs.is_empty(), "{refs:?}");
+    let states = QueryServiceClient::new(channel.clone())
+        .list_states(ListStatesRequest {
+            service: "checkout".into(),
+            category: "step".into(),
+            since_ms: Some(at(day, 0) as i64),
+            until_ms: Some(at(day, 2) as i64),
+            ..Default::default()
+        })
+        .await
+        .expect("ListStates on the same port");
+    let states: Vec<_> = states.into_inner().try_collect().await.unwrap();
+    assert_eq!(states.len(), 2, "two states, no split: {states:?}");
 
     stop.send(true).unwrap();
     running.await.unwrap().expect("the service stops cleanly");

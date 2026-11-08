@@ -3,6 +3,7 @@
 use burgess_core::flow::TreeId;
 use burgess_core::storage::{Day, DayManifest, FileStats, FlushEntry, ObjectName, StatesBounds};
 use burgess_core::wire::UnixMillis;
+use jiff::Timestamp;
 
 /// One flush: a states file and a refs file written together.
 ///
@@ -38,6 +39,16 @@ impl FlushGroup {
         self.entry
             .states_bounds
             .is_some_and(|bounds| bounds.min_tree <= tree && tree <= bounds.max_tree)
+    }
+
+    /// Whether the states file may hold rows timed from `since` to `until`,
+    /// by its bounds alone. A file without rows has no bounds and holds
+    /// nothing.
+    pub fn may_hold_times(&self, since: Timestamp, until: Timestamp) -> bool {
+        self.entry.states_bounds.is_some_and(|bounds| {
+            bounds.min_ts.saturating_timestamp() <= until
+                && since <= bounds.max_ts.saturating_timestamp()
+        })
     }
 
     /// Rows and size of the states file.
@@ -175,5 +186,35 @@ mod tests {
     fn a_flush_without_states_holds_nothing() {
         let day = flushes(vec![entry(1, None)]);
         assert_eq!(holding(&day, 2), [] as [u64; 0]);
+    }
+
+    /// A flush whose states are timed from `min` to `max` milliseconds.
+    fn timed(min: u64, max: u64) -> FlushGroup {
+        let mut entry = entry(1, Some((1, 1)));
+        let bounds = entry.states_bounds.as_mut().unwrap();
+        bounds.min_ts = UnixMillis::from(min);
+        bounds.max_ts = UnixMillis::from(max);
+        flushes(vec![entry]).groups()[0].clone()
+    }
+
+    fn ms(ms: i64) -> Timestamp {
+        Timestamp::from_millisecond(ms).unwrap()
+    }
+
+    #[test]
+    fn time_bounds_are_inclusive_at_both_ends() {
+        let group = timed(100, 200);
+        assert!(group.may_hold_times(ms(200), ms(300)));
+        assert!(group.may_hold_times(ms(0), ms(100)));
+        assert!(group.may_hold_times(ms(120), ms(150)));
+        assert!(group.may_hold_times(ms(0), ms(300)));
+        assert!(!group.may_hold_times(ms(201), ms(300)));
+        assert!(!group.may_hold_times(ms(0), ms(99)));
+    }
+
+    #[test]
+    fn a_flush_without_states_holds_no_time() {
+        let group = flushes(vec![entry(1, None)]).groups()[0].clone();
+        assert!(!group.may_hold_times(ms(0), ms(i64::from(u32::MAX))));
     }
 }

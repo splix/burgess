@@ -52,6 +52,7 @@ fn minimal_file_gets_every_default() {
         assert_eq!(settings.files, FileReadConfig::default());
         assert_eq!(settings.lookup, TreeLookupConfig::default());
         assert_eq!(settings.refs, RefsLookupConfig::default());
+        assert_eq!(settings.states, StatesLookupConfig::default());
     });
 }
 
@@ -83,6 +84,9 @@ concurrent_files = 8
 
 [refs]
 concurrent_days = 6
+
+[states]
+concurrent_days = 3
 "#;
     load_in_jail(toml, &[], |settings| {
         let settings = settings.unwrap();
@@ -116,6 +120,14 @@ concurrent_days = 6
             settings.refs,
             RefsLookupConfig {
                 concurrent_days: NonZeroUsize::new(6).unwrap(),
+                concurrent_files: NonZeroUsize::new(8).unwrap(),
+                days_before: 1,
+            }
+        );
+        assert_eq!(
+            settings.states,
+            StatesLookupConfig {
+                concurrent_days: NonZeroUsize::new(3).unwrap(),
                 concurrent_files: NonZeroUsize::new(8).unwrap(),
                 days_before: 1,
             }

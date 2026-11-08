@@ -6,7 +6,7 @@ use burgess_api::grpc::{ListRefsRequest, ListRefsResponse};
 
 use super::error::{RequestError, TimeField};
 use super::options::{PageOptions, time};
-use super::{Queries, log_problems};
+use super::{Queries, log_problems, non_empty};
 use crate::refs_file::RefKey;
 use crate::refs_lookup::RefsQuery;
 
@@ -32,8 +32,8 @@ impl Queries {
         }
         let query = RefsQuery {
             key,
-            service: filter(request.service),
-            category: filter(request.category),
+            service: non_empty(request.service),
+            category: non_empty(request.category),
             since,
             until: page.until,
         };
@@ -46,9 +46,4 @@ impl Queries {
         );
         Ok(found.into_responses(page.limit))
     }
-}
-
-/// A client that keeps a filter in a string sends "" for no filter.
-fn filter(value: Option<String>) -> Option<String> {
-    value.filter(|value| !value.is_empty())
 }

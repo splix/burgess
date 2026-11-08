@@ -14,15 +14,20 @@
 
 mod config;
 mod error;
-mod found;
 mod lookup;
 mod query;
 
 pub use config::RefsLookupConfig;
 pub use error::{RefsLookupError, UnboundedWalk};
-pub use found::FoundRefs;
 pub use lookup::RefsLookup;
 pub use query::RefsQuery;
+
+use burgess_core::storage::RefRow;
+
+use crate::day_scan::Found;
+
+/// The references a lookup found, and what it could not read.
+pub type FoundRefs = Found<RefRow, RefsLookupError>;
 
 #[cfg(test)]
 mod tests;

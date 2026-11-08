@@ -12,7 +12,7 @@ use parquet::basic::Type as PhysicalType;
 use super::decode::RefsBatch;
 use super::error::{RefsFileProblem, RefsReadError};
 use super::key::RefKey;
-use crate::parquet_file::{ColumnKey, FileProblem, FileReadConfig, leaf_column, open_selected};
+use crate::parquet_file::{ColumnKey, FileProblem, FileReadConfig, OpenFile, leaf_column};
 
 /// Reads the references of outside ids out of refs files, one file at a
 /// time.
@@ -52,29 +52,29 @@ impl RefsFileReader {
         stats: FileStats,
         key: &RefKey,
     ) -> Result<Vec<RefRow>, RefsFileProblem> {
-        let keys = |metadata: &ArrowReaderMetadata| {
-            // Not a key column, but a tree column of another width would be
-            // read as other trees.
-            leaf_column(
-                metadata,
-                RefsColumn::Tree.name(),
-                PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                Some(TreeId::LEN),
-            )?;
-            Ok(vec![
-                ColumnKey {
-                    column: string_column(metadata, RefsColumn::RefType)?,
-                    value: key.ref_type().as_bytes(),
-                },
-                ColumnKey {
-                    column: string_column(metadata, RefsColumn::DomainId)?,
-                    value: key.domain_id().as_bytes(),
-                },
-            ])
-        };
         let store = Arc::clone(&self.store);
         let tail_bytes = self.config.refs_tail_bytes.get();
-        let Some(mut batches) = open_selected(store, file, stats, tail_bytes, keys).await? else {
+        let open = OpenFile::open(store, file, stats, tail_bytes).await?;
+        let metadata = open.metadata();
+        // Not a key column, but a tree column of another width would be read
+        // as other trees.
+        leaf_column(
+            metadata,
+            RefsColumn::Tree.name(),
+            PhysicalType::FIXED_LEN_BYTE_ARRAY,
+            Some(TreeId::LEN),
+        )?;
+        let keys = [
+            ColumnKey {
+                column: string_column(metadata, RefsColumn::RefType)?,
+                value: key.ref_type().as_bytes(),
+            },
+            ColumnKey {
+                column: string_column(metadata, RefsColumn::DomainId)?,
+                value: key.domain_id().as_bytes(),
+            },
+        ];
+        let Some(mut batches) = open.select(&keys)? else {
             return Ok(Vec::new());
         };
         let mut rows = Vec::new();

@@ -20,11 +20,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::grpc::QueryApi;
-use crate::pages::PageLimits;
-use crate::queries::Queries;
-use crate::refs_lookup::RefsLookupConfig;
 use crate::test_support::{Days, at, days_ago, flush, messages, minted_on, noon, state_row};
-use crate::tree_lookup::TreeLookupConfig;
 
 /// A tree of four flows written on `day`: the root splits off 1 and 4, and
 /// 1 splits off 2.
@@ -40,11 +36,7 @@ fn family(tree: TreeId, day: Day) -> Vec<StateRow> {
 }
 
 fn router_over(days: &Days) -> Router {
-    router(Arc::new(Queries {
-        lookup: days.lookup(TreeLookupConfig::default()),
-        refs: days.refs_lookup(RefsLookupConfig::default()),
-        limits: PageLimits::default(),
-    }))
+    router(Arc::new(days.queries()))
 }
 
 async fn get(router: Router, uri: &str) -> (StatusCode, Vec<u8>) {
@@ -300,7 +292,7 @@ async fn a_file_that_is_gone_is_reported_without_repeating_its_cause() {
         panic!("one problem expected: {:?}", page.problems);
     };
     assert!(
-        problem.starts_with(&format!("reading a tree from {gone} failed: ")),
+        problem.starts_with(&format!("reading states from {gone} failed: ")),
         "{problem}"
     );
     let parts: Vec<&str> = problem.split(": ").collect();
@@ -334,11 +326,7 @@ async fn rest_and_grpc_answer_with_the_same_page() {
         b"not a manifest".to_vec(),
     )
     .await;
-    let queries = Arc::new(Queries {
-        lookup: days.lookup(TreeLookupConfig::default()),
-        refs: days.refs_lookup(RefsLookupConfig::default()),
-        limits: PageLimits::default(),
-    });
+    let queries = Arc::new(days.queries());
     let grpc = QueryApi::new(queries.clone());
     let flow = FlowId::new(tree, Subflow::from(1));
     let until = noon(first);

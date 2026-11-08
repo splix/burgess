@@ -2,11 +2,14 @@
 
 use std::num::NonZeroUsize;
 
-use burgess_api::grpc::{GetFlowRequest, GetTreeRequest, ListRefsRequest, Order};
+use burgess_api::grpc::{
+    GetFlowRequest, GetTreeRequest, ListRefsRequest, ListStatesRequest, Order,
+};
 use burgess_core::storage::Day;
 use jiff::Timestamp;
 
 use super::error::{RequestError, TimeField};
+use super::non_empty;
 use crate::pages::PageLimits;
 
 /// The options of a lookup request, as given.
@@ -22,7 +25,7 @@ pub(super) struct PageOptions<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PageRequest {
     /// The end of the request. A tree lookup reads the days up to the day
-    /// after it. A refs lookup also refuses the rows after it.
+    /// after it. A refs or states lookup also refuses the rows after it.
     pub(super) until: Option<Timestamp>,
     /// The number of rows that the page can hold.
     pub(super) limit: NonZeroUsize,
@@ -36,8 +39,7 @@ impl PageOptions<'_> {
         if self.order != Order::Unspecified as i32 {
             return Err(RequestError::Order);
         }
-        // A client that keeps the cursor in a string sends "" for no cursor.
-        if self.cursor.is_some_and(|cursor| !cursor.is_empty()) {
+        if non_empty(self.cursor).is_some() {
             return Err(RequestError::Cursor);
         }
         let until = self
@@ -58,6 +60,12 @@ impl PageOptions<'_> {
 /// The time `ms` of the option `field`, refused when no day can hold it.
 pub(super) fn time(field: TimeField, ms: i64) -> Result<Timestamp, RequestError> {
     let time = Timestamp::from_millisecond(ms).map_err(|_| RequestError::TimeMs { field, ms })?;
+    on_a_day(field, time)
+}
+
+/// `time`, the value of the option `field`, refused when no day can hold
+/// it.
+pub(super) fn on_a_day(field: TimeField, time: Timestamp) -> Result<Timestamp, RequestError> {
     Day::utc(time).map_err(|source| RequestError::TimeDay {
         field,
         time,
@@ -82,4 +90,9 @@ macro_rules! page_options_of {
     )+};
 }
 
-page_options_of!(GetTreeRequest, GetFlowRequest, ListRefsRequest);
+page_options_of!(
+    GetTreeRequest,
+    GetFlowRequest,
+    ListRefsRequest,
+    ListStatesRequest
+);

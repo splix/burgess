@@ -6,6 +6,7 @@ mod limits;
 mod page;
 mod refs;
 mod row;
+mod states;
 
 pub use limits::{LimitError, PageLimits, PageLimitsError};
 
