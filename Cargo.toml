@@ -41,18 +41,17 @@ jiff = { version = "0.2", default-features = false, features = ["std"] }
 prost = "0.14"
 rdkafka = { version = "0.39", features = ["zstd"] }
 rand = "0.10"
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 thiserror = "2"
 tempfile = "3"
 testcontainers-modules = { version = "0.15", features = ["kafka"] }
 tokio = "1"
+tokio-stream = "0.1"
 tonic = { version = "0.14", default-features = false }
 tonic-prost = "0.14"
 tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-properties = "0.1"
-wiremock = "0.6"
 
 prost-build = "0.14"
 protox = "0.9"

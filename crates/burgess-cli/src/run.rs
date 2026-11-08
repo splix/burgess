@@ -32,7 +32,7 @@ pub async fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write) -> Result<O
         Command::Tree { id, page } => (Lookup::Tree(id.tree()), Heading::Tree(id.tree()), page),
         Command::Flow { id, page } => (Lookup::Flow(id), Heading::Flow(id), page),
     };
-    let page = QueryClient::new(cli.server).page(lookup, page).await?;
+    let page = QueryClient::new(cli.server)?.page(lookup, page).await?;
     let printed = cli
         .output
         .write_rows(heading, &page, out)

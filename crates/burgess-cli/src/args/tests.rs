@@ -8,8 +8,14 @@ use super::*;
 const TREE: &str = "019a5c2e7f00a1b2c3d4e5f6";
 const FLOW: &str = "019a5c2e7f00a1b2c3d4e5f63f2a9c01";
 
+/// Parses `burgess <args>`. A server is given when `args` has none, thus
+/// a `BURGESS_SERVER` in the environment of the test does not change it.
 fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
-    Cli::try_parse_from(std::iter::once("burgess").chain(args.iter().copied()))
+    let server = (!args.contains(&"--server")).then_some(["--server", DEFAULT_SERVER]);
+    let args = std::iter::once("burgess")
+        .chain(server.into_iter().flatten())
+        .chain(args.iter().copied());
+    Cli::try_parse_from(args)
 }
 
 fn refused(args: &[&str]) -> clap::Error {
@@ -115,7 +121,10 @@ fn server_and_output_may_come_before_or_after_the_command() {
         ],
     ] {
         let cli = parse(&args).unwrap();
-        assert_eq!(cli.server.as_str(), "http://burgess:9000/");
+        assert_eq!(
+            cli.server.uri().authority().unwrap().as_str(),
+            "burgess:9000"
+        );
         assert_eq!(cli.output, Output::JsonLines);
     }
 }
@@ -153,8 +162,8 @@ fn a_limit_is_a_positive_number() {
     else {
         panic!("a tree lookup");
     };
-    assert_eq!(page.limit, NonZeroUsize::new(20));
-    for limit in ["0", "-1", "many"] {
+    assert_eq!(page.limit, NonZeroU32::new(20));
+    for limit in ["0", "-1", "many", "4294967296"] {
         assert_eq!(
             refused(&["tree", TREE, &format!("--limit={limit}")]).kind(),
             ErrorKind::ValueValidation,
@@ -164,11 +173,11 @@ fn a_limit_is_a_positive_number() {
 }
 
 #[test]
-fn a_server_that_is_no_url_is_refused() {
-    assert_eq!(
-        refused(&["--server", "burgess 9000", "tree", TREE]).kind(),
-        ErrorKind::ValueValidation
-    );
+fn a_server_that_grpc_cannot_use_is_refused() {
+    let error = refused(&["--server", "http://burgess:9000/burgess", "tree", TREE]);
+
+    assert_eq!(error.kind(), ErrorKind::ValueValidation);
+    assert!(error.to_string().contains("expected no path"), "{error}");
 }
 
 #[test]

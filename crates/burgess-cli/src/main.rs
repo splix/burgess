@@ -7,8 +7,7 @@
 //! standard error.
 //!
 //! Exit codes: 0 when every row was read, 1 when the lookup failed, 2 for a
-//! command line the CLI or the service refused, or a server address that
-//! cannot be one, 3 when rows were printed but
+//! command line the CLI or the service refused, 3 when rows were printed but
 //! the service could not read everything, so some may be missing.
 
 use std::io;

@@ -1,29 +1,39 @@
-//! Requests to a mock query service, and how its answers are read.
+//! Requests to a gRPC query service in the test process, and how its
+//! answers are read.
 
-use std::num::NonZeroUsize;
+use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 
+use burgess_api::grpc::tree_row::Entry;
+use burgess_api::grpc::{PayloadType, Problem, State, TreeItem, TreeRow};
 use burgess_core::report::error_chain;
 use jiff::Timestamp;
-use serde_json::json;
-use wiremock::matchers::{method, path, query_param};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::*;
+use crate::server::ServerAddress;
+use crate::test_support::{Answer, MockService, Received};
 
 const TREE: &str = "019a5c2e7f00a1b2c3d4e5f6";
 const FLOW: &str = "019a5c2e7f00a1b2c3d4e5f63f2a9c01";
 
-fn page_body() -> serde_json::Value {
-    json!({"rows": [{
-        "flow_id": format!("{TREE}00000000"), "tree": TREE, "subflow": 0,
-        "ts": 1_793_880_000_000_u64, "kind": "state", "service": "checkout",
-        "category": "order", "meta": {}, "payload_type": "json",
-        "payload": {"order": 7}, "child_subflow": null,
-    }], "truncated": false})
+fn state() -> TreeRow {
+    TreeRow {
+        flow_id: format!("{TREE}00000000"),
+        tree: TREE.into(),
+        subflow: 0,
+        ts_ms: 1_793_880_000_000,
+        service: "checkout".into(),
+        category: "order".into(),
+        entry: Some(Entry::State(State {
+            meta: BTreeMap::new(),
+            payload_type: PayloadType::Json as i32,
+            payload: Some(r#"{"order":7}"#.into()),
+        })),
+    }
 }
 
-fn client(server: &MockServer) -> QueryClient {
-    QueryClient::new(server.uri().parse().unwrap())
+fn client(service: &MockService) -> QueryClient {
+    QueryClient::new(service.server.clone()).unwrap()
 }
 
 fn tree() -> Lookup {
@@ -37,176 +47,165 @@ fn no_options() -> PageArgs {
     }
 }
 
-async fn answering(template: ResponseTemplate) -> MockServer {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(template)
-        .mount(&server)
-        .await;
-    server
+async fn lookup_error(answer: Answer) -> (ClientError, ServerAddress) {
+    let service = MockService::start(answer).await;
+    let error = client(&service)
+        .page(tree(), no_options())
+        .await
+        .unwrap_err();
+    (error, service.server)
 }
 
 #[tokio::test]
 async fn asks_for_a_tree_with_its_options_and_reads_the_page() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(format!("/v1/trees/{TREE}")))
-        .and(query_param("until", "1793880000000"))
-        .and(query_param("limit", "20"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(page_body()))
-        .expect(1)
-        .mount(&server)
-        .await;
+    let service = MockService::start(Answer::rows(vec![state()])).await;
     let options = PageArgs {
         until: Some(Timestamp::from_millisecond(1_793_880_000_000).unwrap()),
-        limit: NonZeroUsize::new(20),
+        limit: NonZeroU32::new(20),
     };
 
-    let page = client(&server).page(tree(), options).await.unwrap();
+    let page = client(&service).page(tree(), options).await.unwrap();
 
     assert_eq!(page.rows.len(), 1);
     assert_eq!(
         page.rows[0].payload.as_ref().unwrap().get(),
         r#"{"order":7}"#
     );
+    assert_eq!(
+        service.received(),
+        [Received::Tree(GetTreeRequest {
+            tree: Some(Tree::TreeId(TREE.into())),
+            until_ms: Some(1_793_880_000_000),
+            limit: Some(20),
+            ..Default::default()
+        })]
+    );
 }
 
 #[tokio::test]
 async fn asks_for_a_flow_without_options() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path(format!("/v1/flows/{FLOW}")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(page_body()))
-        .expect(1)
-        .mount(&server)
-        .await;
+    let service = MockService::start(Answer::rows(vec![state()])).await;
 
     let lookup = Lookup::Flow(FLOW.parse().unwrap());
-    client(&server).page(lookup, no_options()).await.unwrap();
+    client(&service).page(lookup, no_options()).await.unwrap();
 
-    let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests[0].url.query(), None);
+    assert_eq!(
+        service.received(),
+        [Received::Flow(GetFlowRequest {
+            flow_id: FLOW.into(),
+            ..Default::default()
+        })]
+    );
 }
 
 #[tokio::test]
-async fn a_service_behind_a_path_is_asked_below_it() {
-    let server = MockServer::start().await;
-    Mock::given(path(format!("/burgess/v1/trees/{TREE}")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(page_body()))
-        .expect(2)
-        .mount(&server)
-        .await;
+async fn problems_and_a_cut_reach_the_page() {
+    let service = MockService::start(Answer::items(vec![
+        TreeItem::Problem(Problem {
+            message: "the manifest of 20261105 is invalid".into(),
+        }),
+        TreeItem::Row(state()),
+        TreeItem::Truncated,
+    ]))
+    .await;
 
-    for base in ["burgess", "burgess/"] {
-        let client = QueryClient::new(format!("{}/{base}", server.uri()).parse().unwrap());
-        client.page(tree(), no_options()).await.unwrap();
-    }
+    let page = client(&service).page(tree(), no_options()).await.unwrap();
+
+    assert_eq!(page.problems, ["the manifest of 20261105 is invalid"]);
+    assert_eq!(page.rows.len(), 1);
+    assert!(page.truncated);
 }
 
 #[tokio::test]
 async fn a_refusal_carries_the_services_own_words() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(
-            ResponseTemplate::new(400)
-                .set_body_json(json!({"error": "limit 20000 is over the maximum of 10000"})),
-        )
-        .mount(&server)
-        .await;
-
-    let error = client(&server)
-        .page(tree(), no_options())
-        .await
-        .unwrap_err();
+    let (error, _) = lookup_error(Answer::Refuse(Status::invalid_argument(
+        "limit 20000 is over the maximum of 10000",
+    )))
+    .await;
 
     assert_eq!(
         error_chain(&error),
-        "the query service answered 400 Bad Request: limit 20000 is over the maximum of 10000"
+        "the query service refused the request: limit 20000 is over the maximum of 10000"
     );
     assert!(error.is_usage());
 }
 
 #[tokio::test]
-async fn an_error_without_an_error_body_shows_the_body() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(502).set_body_string("Bad Gateway\n"))
-        .mount(&server)
-        .await;
-
-    let error = client(&server)
-        .page(tree(), no_options())
-        .await
-        .unwrap_err();
+async fn an_empty_message_says_there_was_no_message() {
+    let (error, server) = lookup_error(Answer::Refuse(Status::unimplemented(""))).await;
 
     assert_eq!(
-        error.to_string(),
-        "the query service answered 502 Bad Gateway: Bad Gateway"
+        error_chain(&error),
+        format!("the query service at {server} failed with Unimplemented: no message")
     );
     assert!(!error.is_usage());
 }
 
 #[tokio::test]
-async fn an_empty_error_says_there_was_no_message() {
-    let server = answering(ResponseTemplate::new(404)).await;
+async fn an_answer_that_stops_early_keeps_its_rows_and_tells_why() {
+    let service = MockService::start(Answer::Stream(vec![
+        Ok(TreeItem::Row(state())),
+        Err(Status::internal("the disk is gone")),
+    ]))
+    .await;
 
-    let error = client(&server)
-        .page(tree(), no_options())
-        .await
-        .unwrap_err();
+    let page = client(&service).page(tree(), no_options()).await.unwrap();
 
+    assert_eq!(page.rows.len(), 1);
     assert_eq!(
-        error.to_string(),
-        "the query service answered 404 Not Found: no message"
+        page.problems,
+        [format!(
+            "the answer stopped before its end: the query service at {} failed with Internal: the disk is gone",
+            service.server
+        )]
     );
 }
 
 #[tokio::test]
-async fn an_answer_that_is_not_a_page_is_reported() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("<html>"))
-        .mount(&server)
-        .await;
+async fn an_answer_that_stops_before_its_first_message_is_an_error() {
+    let (error, _) = lookup_error(Answer::Stream(vec![Err(Status::invalid_argument(
+        "limit must be at least 1",
+    ))]))
+    .await;
 
-    let error = client(&server)
-        .page(tree(), no_options())
-        .await
-        .unwrap_err();
-
-    assert!(matches!(error, ClientError::NotAPage { .. }), "{error:?}");
+    assert!(matches!(error, ClientError::Refused { .. }), "{error:?}");
 }
 
 #[tokio::test]
-async fn a_service_that_is_not_there_is_reported_with_its_address() {
+async fn a_service_that_is_not_there_is_reported_with_its_address_and_cause() {
     let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = format!("http://{}/", free.local_addr().unwrap());
+    let address: ServerAddress = format!("http://{}", free.local_addr().unwrap())
+        .parse()
+        .unwrap();
     drop(free);
 
-    let error = QueryClient::new(address.parse().unwrap())
+    let error = QueryClient::new(address.clone())
+        .unwrap()
         .page(tree(), no_options())
         .await
         .unwrap_err();
 
     assert!(
-        matches!(error, ClientError::Unreachable { .. }),
+        matches!(error, ClientError::Unavailable { .. }),
         "{error:?}"
     );
+    let chain = error_chain(&error);
+    let expected = format!("the query service at {address} is unavailable: tcp connect error: ");
     assert!(
-        error
-            .to_string()
-            .starts_with(&format!("asking the query service at {address} failed")),
-        "{error}"
+        chain.starts_with(&expected) && chain.len() > expected.len(),
+        "the cause of the failed connect is kept: {chain}"
     );
+    assert!(!error.is_usage());
 }
 
 #[tokio::test]
-async fn an_address_without_paths_is_refused_before_asking() {
-    let error = QueryClient::new("mailto:burgess@example.com".parse().unwrap())
-        .page(tree(), no_options())
-        .await
-        .unwrap_err();
-
-    assert!(matches!(error, ClientError::NotABase { .. }), "{error:?}");
-    assert!(error.is_usage());
+async fn an_https_client_sets_up_tls_for_names_and_ip_addresses() {
+    for server in [
+        "https://burgess.example.com",
+        "https://[::1]:8443",
+        "https://10.0.0.5",
+    ] {
+        let client = QueryClient::new(server.parse().unwrap());
+        assert!(client.is_ok(), "{server}: {:?}", client.err());
+    }
 }
