@@ -2,11 +2,11 @@
 
 use std::collections::BTreeMap;
 
-use burgess_core::storage::StateRow;
+use burgess_core::storage::{RefRow, StateRow};
 use burgess_core::validation::{Limits, Validate};
 use burgess_core::wire::Record;
 
-use super::rows::{RefRow, Row};
+use super::rows::Row;
 use super::skip::{SkipKind, SkipReason};
 use crate::source::{LogEntry, PartitionId, Position};
 

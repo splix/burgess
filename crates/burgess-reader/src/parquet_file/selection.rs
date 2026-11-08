@@ -1,92 +1,108 @@
-//! Which rows of a file can hold a tree, by the statistics on `tree`.
+//! Which rows of a file can hold a key, by the statistics on its columns.
 
-use burgess_core::flow::TreeId;
 use parquet::arrow::arrow_reader::{RowGroupSelection, RowSelection, RowSelector};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::page_index::column_index::ColumnIndexMetaData;
 
-/// The rows to fetch for one tree: whole pages of `tree` whose bounds
-/// include it, in the row groups whose bounds include it.
+/// The value that one key column must have, as the bytes it is stored as.
+///
+/// A file is sorted by its key columns, thus their bounds are narrow. String
+/// bounds can be truncated by the writer. A truncated minimum is a prefix and
+/// a truncated maximum is made larger, thus they stay correct bounds.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ColumnKey<'a> {
+    /// The leaf index of the column.
+    pub(crate) column: usize,
+    /// The value that a row must have.
+    pub(crate) value: &'a [u8],
+}
+
+/// The rows to fetch for a key: the pages whose bounds include the key, in
+/// the row groups whose bounds include it.
 ///
 /// Pages are the unit the store is read in, so a selected page may also
-/// hold rows of neighbouring trees. They are dropped after decoding.
+/// hold rows of other keys. They are dropped after decoding.
 #[derive(Debug)]
-pub(super) struct TreeSelection {
+pub(crate) struct KeySelection {
     /// Row groups to read, in file order, each with the rows to read in it.
     /// Rows are counted within each row group, so a damaged page index in
     /// one cannot misplace the rows read from another.
-    pub(super) row_groups: Vec<RowGroupSelection>,
+    pub(crate) row_groups: Vec<RowGroupSelection>,
 }
 
-impl TreeSelection {
-    /// The selection for `tree`, or `None` when the statistics rule out
-    /// every row. `tree_column` is the leaf index of the `tree` column.
+impl KeySelection {
+    /// The selection for a row that has every value of `keys`, or `None`
+    /// when the statistics rule out every row.
     ///
-    /// Bounds that are missing or inconsistent cannot rule anything out, so
-    /// such a row group is read whole rather than wrongly found empty.
-    pub(super) fn find(
-        metadata: &ParquetMetaData,
-        tree_column: usize,
-        tree: TreeId,
-    ) -> Option<Self> {
+    /// A row can hold the key only when the bounds of each key column
+    /// include its value. The key columns have different page boundaries,
+    /// thus the rows of each column are selected and the selections are
+    /// intersected. Bounds that are missing or inconsistent cannot rule
+    /// anything out, so they select all rows rather than wrongly none.
+    pub(crate) fn find(metadata: &ParquetMetaData, keys: &[ColumnKey<'_>]) -> Option<Self> {
         let row_groups: Vec<RowGroupSelection> = metadata
             .row_groups()
             .iter()
             .enumerate()
+            .filter(|(_, row_group)| keys.iter().all(|key| row_group_may_hold(row_group, *key)))
             .filter_map(|(index, row_group)| {
-                let statistics = row_group.column(tree_column).statistics();
-                let bounds = Bounds {
-                    min: statistics.and_then(|stats| stats.min_bytes_opt()),
-                    max: statistics.and_then(|stats| stats.max_bytes_opt()),
-                };
-                if !bounds.may_hold(tree) {
-                    return None;
-                }
-                match page_selectors(metadata, index, row_group, tree_column, tree) {
+                let pages = keys
+                    .iter()
+                    .filter_map(|key| page_selectors(metadata, index, row_group, *key))
+                    .map(RowSelection::from)
+                    .reduce(|selected, other| selected.intersection(&other));
+                match pages {
                     None => Some(RowGroupSelection::new(index, None)),
-                    Some(pages) if pages.iter().any(|page| !page.skip) => Some(
-                        RowGroupSelection::new(index, Some(RowSelection::from(pages))),
-                    ),
+                    Some(pages) if pages.selects_any() => {
+                        Some(RowGroupSelection::new(index, Some(pages)))
+                    }
                     Some(_) => None,
                 }
             })
             .collect();
-        (!row_groups.is_empty()).then_some(TreeSelection { row_groups })
+        (!row_groups.is_empty()).then_some(KeySelection { row_groups })
     }
 }
 
-/// The smallest and largest tree in some rows, as raw id bytes.
+fn row_group_may_hold(row_group: &RowGroupMetaData, key: ColumnKey<'_>) -> bool {
+    let statistics = row_group.column(key.column).statistics();
+    Bounds {
+        min: statistics.and_then(|stats| stats.min_bytes_opt()),
+        max: statistics.and_then(|stats| stats.max_bytes_opt()),
+    }
+    .may_hold(key.value)
+}
+
+/// The smallest and largest value in some rows, as stored bytes.
 struct Bounds<'a> {
     min: Option<&'a [u8]>,
     max: Option<&'a [u8]>,
 }
 
 impl Bounds<'_> {
-    /// Whether the rows may hold `tree`. The file stores ids as their raw
-    /// bytes, which compare the same way the ids sort.
-    fn may_hold(&self, tree: TreeId) -> bool {
-        let tree = tree.as_bytes().as_slice();
-        self.min.is_none_or(|min| min <= tree) && self.max.is_none_or(|max| tree <= max)
+    /// Whether the rows may hold `value`. Ids and strings are stored so that
+    /// their bytes compare the same way that the values sort.
+    fn may_hold(&self, value: &[u8]) -> bool {
+        self.min.is_none_or(|min| min <= value) && self.max.is_none_or(|max| value <= max)
     }
 }
 
-/// One selector per page of `tree` in a row group, or `None` when the row
-/// group has no usable page index.
+/// One selector per page of the key column in a row group, or `None` when
+/// the row group has no usable page index for it.
 fn page_selectors(
     metadata: &ParquetMetaData,
     index: usize,
     row_group: &RowGroupMetaData,
-    tree_column: usize,
-    tree: TreeId,
+    key: ColumnKey<'_>,
 ) -> Option<Vec<RowSelector>> {
     let page_index = metadata.page_index_for_row_group(index);
-    let Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(bounds)) =
-        page_index.column_index(tree_column)
-    else {
-        return None;
+    let bounds = match page_index.column_index(key.column)? {
+        ColumnIndexMetaData::BYTE_ARRAY(bounds)
+        | ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(bounds) => bounds,
+        _ => return None,
     };
     let first_rows: Vec<i64> = page_index
-        .page_locations(tree_column)?
+        .page_locations(key.column)?
         .iter()
         .map(|location| location.first_row_index)
         .collect();
@@ -98,7 +114,7 @@ fn page_selectors(
             min: bounds.min_value(page),
             max: bounds.max_value(page),
         }
-        .may_hold(tree)
+        .may_hold(key.value)
     })
 }
 

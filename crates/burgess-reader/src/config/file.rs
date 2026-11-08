@@ -10,7 +10,8 @@ use serde::Deserialize;
 use super::{ConfigError, Settings};
 use crate::manifests::ManifestCacheConfig;
 use crate::pages::PageLimits;
-use crate::states_file::StatesFileConfig;
+use crate::parquet_file::FileReadConfig;
+use crate::refs_lookup::RefsLookupConfig;
 use crate::tree_lookup::TreeLookupConfig;
 
 /// The whole file. Unknown keys are errors, so a misspelled setting is
@@ -28,6 +29,8 @@ pub(super) struct FileConfig {
     files: FilesSection,
     #[serde(default)]
     lookup: LookupSection,
+    #[serde(default)]
+    refs: RefsSection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +54,7 @@ struct ManifestsSection {
 #[serde(deny_unknown_fields, default)]
 struct FilesSection {
     tail_bytes: NonZeroUsize,
+    refs_tail_bytes: NonZeroUsize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +63,12 @@ struct LookupSection {
     stop_slack_days: u32,
     days_before: u32,
     concurrent_files: NonZeroUsize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct RefsSection {
+    concurrent_days: NonZeroUsize,
 }
 
 /// Section defaults come from the typed settings, so each default is defined
@@ -85,8 +95,10 @@ impl Default for ManifestsSection {
 
 impl Default for FilesSection {
     fn default() -> Self {
+        let defaults = FileReadConfig::default();
         FilesSection {
-            tail_bytes: StatesFileConfig::default().tail_bytes,
+            tail_bytes: defaults.tail_bytes,
+            refs_tail_bytes: defaults.refs_tail_bytes,
         }
     }
 }
@@ -98,6 +110,14 @@ impl Default for LookupSection {
             stop_slack_days: defaults.stop_slack_days,
             days_before: defaults.days_before,
             concurrent_files: defaults.concurrent_files,
+        }
+    }
+}
+
+impl Default for RefsSection {
+    fn default() -> Self {
+        RefsSection {
+            concurrent_days: RefsLookupConfig::default().concurrent_days,
         }
     }
 }
@@ -119,13 +139,19 @@ impl TryFrom<FileConfig> for Settings {
                 unsealed_ttl: file.manifests.unsealed_ttl,
                 retention_days: file.manifests.retention_days,
             },
-            files: StatesFileConfig {
+            files: FileReadConfig {
                 tail_bytes: file.files.tail_bytes,
+                refs_tail_bytes: file.files.refs_tail_bytes,
             },
             lookup: TreeLookupConfig {
                 stop_slack_days: file.lookup.stop_slack_days,
                 days_before: file.lookup.days_before,
                 concurrent_files: file.lookup.concurrent_files,
+            },
+            refs: RefsLookupConfig {
+                concurrent_days: file.refs.concurrent_days,
+                concurrent_files: file.lookup.concurrent_files,
+                days_before: file.lookup.days_before,
             },
         })
     }

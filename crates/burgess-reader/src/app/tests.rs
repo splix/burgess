@@ -3,9 +3,9 @@
 
 use std::path::Path;
 
-use burgess_api::grpc::GetTreeRequest;
 use burgess_api::grpc::get_tree_request::Tree;
 use burgess_api::grpc::query_service_client::QueryServiceClient;
+use burgess_api::grpc::{GetTreeRequest, ListRefsRequest};
 use burgess_api::{ErrorBody, Page};
 use burgess_store::StoreConfig;
 use futures::TryStreamExt;
@@ -17,7 +17,8 @@ use tonic::transport::Channel;
 use super::*;
 use crate::manifests::ManifestCacheConfig;
 use crate::pages::PageLimits;
-use crate::states_file::StatesFileConfig;
+use crate::parquet_file::FileReadConfig;
+use crate::refs_lookup::RefsLookupConfig;
 use crate::test_support::{at, days_ago, flush, minted_on, put_day, state_row};
 use crate::tree_lookup::TreeLookupConfig;
 
@@ -29,8 +30,9 @@ fn settings(store: &Path) -> Settings {
         },
         pages: PageLimits::default(),
         manifests: ManifestCacheConfig::default(),
-        files: StatesFileConfig::default(),
+        files: FileReadConfig::default(),
         lookup: TreeLookupConfig::default(),
+        refs: RefsLookupConfig::default(),
     }
 }
 
@@ -79,12 +81,22 @@ async fn answers_lookups_over_files_in_a_local_directory() {
         tree: Some(Tree::TreeId(tree.to_string())),
         ..Default::default()
     };
-    let answer = QueryServiceClient::new(channel)
+    let answer = QueryServiceClient::new(channel.clone())
         .get_tree(request)
         .await
         .expect("gRPC on the same port");
     let messages: Vec<_> = answer.into_inner().try_collect().await.unwrap();
     assert_eq!(messages.len(), 3);
+    let refs = QueryServiceClient::new(channel.clone())
+        .list_refs(ListRefsRequest {
+            ref_type: "order_id".into(),
+            domain_id: "ORD-1".into(),
+            ..Default::default()
+        })
+        .await
+        .expect("ListRefs on the same port");
+    let refs: Vec<_> = refs.into_inner().try_collect().await.unwrap();
+    assert!(refs.is_empty(), "{refs:?}");
 
     stop.send(true).unwrap();
     running.await.unwrap().expect("the service stops cleanly");

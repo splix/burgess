@@ -24,7 +24,8 @@ use figment::providers::{Env, Format, Toml};
 use self::file::FileConfig;
 use crate::manifests::ManifestCacheConfig;
 use crate::pages::{PageLimits, PageLimitsError};
-use crate::states_file::StatesFileConfig;
+use crate::parquet_file::FileReadConfig;
+use crate::refs_lookup::RefsLookupConfig;
 use crate::tree_lookup::TreeLookupConfig;
 
 /// Prefix of the environment variables that override settings.
@@ -41,10 +42,13 @@ pub struct Settings {
     pub pages: PageLimits,
     /// How manifests are cached, and which days are kept.
     pub manifests: ManifestCacheConfig,
-    /// How states files are read.
-    pub files: StatesFileConfig,
-    /// How far lookups walk.
+    /// How states files and refs files are read.
+    pub files: FileReadConfig,
+    /// How far tree lookups walk, and how many files they read at once.
     pub lookup: TreeLookupConfig,
+    /// How refs lookups walk. `lookup.concurrent_files` and
+    /// `lookup.days_before` apply to the two lookups.
+    pub refs: RefsLookupConfig,
 }
 
 /// Why the settings cannot be used.

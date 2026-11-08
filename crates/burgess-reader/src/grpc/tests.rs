@@ -7,15 +7,17 @@ use burgess_api::grpc::get_tree_request::Tree;
 use burgess_api::grpc::query_service_server::QueryService;
 use burgess_api::grpc::{
     GetFlowRequest, GetTreeRequest, ListRefsRequest, ListStatesRequest, Order, get_flow_response,
-    get_tree_response::Item,
+    get_tree_response::Item, list_refs_response,
 };
 use burgess_api::{Row, RowKind};
 use burgess_core::flow::{FlowId, Subflow, TreeId};
-use burgess_core::storage::{Day, ObjectName, StateRow};
+use burgess_core::storage::{Day, ObjectName, RefRow, StateRow};
+use burgess_core::wire::UnixMillis;
 use tonic::{Code, Request, Status};
 
 use super::*;
 use crate::pages::PageLimits;
+use crate::refs_lookup::RefsLookupConfig;
 use crate::test_support::{Days, at, days_ago, flush, messages, minted_on, noon, state_row};
 use crate::tree_lookup::TreeLookupConfig;
 
@@ -44,6 +46,7 @@ async fn one_tree() -> (Days, TreeId) {
 fn api(days: &Days) -> QueryApi {
     QueryApi::new(Arc::new(Queries {
         lookup: days.lookup(TreeLookupConfig::default()),
+        refs: days.refs_lookup(RefsLookupConfig::default()),
         limits: PageLimits::default(),
     }))
 }
@@ -380,20 +383,216 @@ async fn what_the_lookup_could_not_read_comes_before_the_rows() {
 }
 
 #[tokio::test]
-async fn states_and_references_are_not_served_yet() {
+async fn states_are_not_served_yet() {
     let days = Days::new();
 
     let states = api(&days)
         .list_states(Request::new(ListStatesRequest::default()))
         .await
         .expect_err("a refusal");
-    let refs = api(&days)
-        .list_refs(Request::new(ListRefsRequest::default()))
-        .await
-        .expect_err("a refusal");
 
+    assert_eq!(states.code(), Code::Unimplemented);
+}
+
+fn reference(domain_id: &str, tree: TreeId, subflow: u32, day: Day, offset: u64) -> RefRow {
+    RefRow {
+        ref_type: "order_id".into(),
+        domain_id: domain_id.into(),
+        service: "checkout".into(),
+        category: Some("payment".into()),
+        tree,
+        subflow: Subflow::from(subflow),
+        time: UnixMillis::from(at(day, offset)),
+    }
+}
+
+fn refs_request(domain_id: &str) -> ListRefsRequest {
+    ListRefsRequest {
+        ref_type: "order_id".into(),
+        domain_id: domain_id.into(),
+        ..Default::default()
+    }
+}
+
+async fn refs(days: &Days, request: ListRefsRequest) -> Vec<list_refs_response::Item> {
+    let answer = api(days).list_refs(Request::new(request)).await;
+    messages(answer)
+        .await
+        .into_iter()
+        .map(|message| message.item.expect("an item"))
+        .collect()
+}
+
+/// A store with three references to ORD-1 and one to ORD-2, three days
+/// ago.
+async fn some_references() -> (Days, Day, TreeId) {
+    let day = days_ago(3);
+    let tree = minted_on(day, 5);
+    let days = Days::new();
+    days.put_refs(
+        day,
+        &[&[
+            reference("ORD-1", tree, 0, day, 0),
+            reference("ORD-1", tree, 1, day, 1),
+            reference("ORD-2", tree, 2, day, 2),
+            reference("ORD-1", tree, 3, day, 3),
+        ]],
+    )
+    .await;
+    (days, day, tree)
+}
+
+#[tokio::test]
+async fn references_answer_with_a_message_per_reference() {
+    let (days, day, tree) = some_references().await;
+
+    let items = refs(&days, refs_request("ORD-1")).await;
+
+    assert_eq!(items.len(), 3, "rows only: {items:?}");
+    let list_refs_response::Item::Row(row) = &items[0] else {
+        panic!("a row expected: {items:?}");
+    };
     assert_eq!(
-        (states.code(), refs.code()),
-        (Code::Unimplemented, Code::Unimplemented)
+        *row,
+        burgess_api::grpc::RefRow {
+            ref_type: "order_id".into(),
+            domain_id: "ORD-1".into(),
+            service: "checkout".into(),
+            category: Some("payment".into()),
+            flow_id: FlowId::new(tree, Subflow::ROOT).to_string(),
+            tree: tree.to_string(),
+            subflow: 0,
+            ts_ms: at(day, 0) as i64,
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_limit_ends_the_references_with_a_message_that_tells_they_were_cut() {
+    let (days, _, _) = some_references().await;
+
+    let items = refs(
+        &days,
+        ListRefsRequest {
+            limit: Some(2),
+            ..refs_request("ORD-1")
+        },
+    )
+    .await;
+
+    assert_eq!(items.len(), 3, "{items:?}");
+    assert!(
+        matches!(items.last(), Some(list_refs_response::Item::Truncated(_))),
+        "{items:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_id_with_spaces_around_it_finds_what_the_writer_stored() {
+    let (days, _, _) = some_references().await;
+
+    let items = refs(
+        &days,
+        ListRefsRequest {
+            domain_id: " ORD-2 ".into(),
+            ..refs_request("ORD-2")
+        },
+    )
+    .await;
+
+    assert_eq!(items.len(), 1, "{items:?}");
+}
+
+#[tokio::test]
+async fn an_empty_filter_is_no_filter() {
+    let (days, _, _) = some_references().await;
+
+    let items = refs(
+        &days,
+        ListRefsRequest {
+            service: Some(String::new()),
+            category: Some(String::new()),
+            ..refs_request("ORD-1")
+        },
+    )
+    .await;
+
+    assert_eq!(items.len(), 3, "{items:?}");
+}
+
+#[tokio::test]
+async fn a_references_request_the_service_cannot_serve_is_refused() {
+    let days = Days::new();
+    let cases = [
+        (
+            ListRefsRequest {
+                ref_type: "order id".into(),
+                ..refs_request("ORD-1")
+            },
+            "invalid reference: ",
+        ),
+        (refs_request("  "), "invalid reference: "),
+        (
+            ListRefsRequest {
+                since_ms: Some(2_000),
+                until_ms: Some(1_000),
+                ..refs_request("ORD-1")
+            },
+            "is after until",
+        ),
+        (
+            ListRefsRequest {
+                since_ms: Some(i64::MAX),
+                ..refs_request("ORD-1")
+            },
+            "since_ms 9223372036854775807 is out of the range of times",
+        ),
+        (
+            ListRefsRequest {
+                order: Order::TsDescending as i32,
+                ..refs_request("ORD-1")
+            },
+            "not served yet",
+        ),
+        (
+            ListRefsRequest {
+                limit: Some(0),
+                ..refs_request("ORD-1")
+            },
+            "limit must be at least 1",
+        ),
+    ];
+    for (request, expected) in cases {
+        let error = refused(api(&days).list_refs(Request::new(request.clone())).await);
+        assert!(error.contains(expected), "{request:?}: {error}");
+    }
+    assert!(
+        days.store.requests().is_empty(),
+        "a refused request reads nothing"
+    );
+}
+
+#[tokio::test]
+async fn what_the_refs_lookup_could_not_read_comes_before_the_references() {
+    let (days, _, _) = some_references().await;
+    days.put_object(
+        &ObjectName::Manifest { day: days_ago(2) },
+        b"not a manifest".to_vec(),
+    )
+    .await;
+
+    let items = refs(&days, refs_request("ORD-1")).await;
+
+    assert!(
+        matches!(
+            items.as_slice(),
+            [
+                list_refs_response::Item::Problem(_),
+                list_refs_response::Item::Row(_),
+                list_refs_response::Item::Row(_),
+                list_refs_response::Item::Row(_),
+            ]
+        ),
+        "{items:?}"
     );
 }

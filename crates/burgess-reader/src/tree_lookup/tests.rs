@@ -10,6 +10,7 @@ use object_store::path::Path;
 
 use super::*;
 use crate::manifests::{ManifestCacheConfig, ManifestReadError};
+use crate::parquet_file::FileProblem;
 use crate::states_file::StatesFileProblem;
 use crate::test_support::{Days, at, days_ago, flush, minted_on, noon, state_row, subflows};
 
@@ -375,7 +376,10 @@ async fn a_listed_file_that_is_gone_is_reported_and_the_others_are_read() {
         panic!("unexpected problems: {:?}", found.problems);
     };
     assert_eq!(error.file(), &gone);
-    assert!(matches!(error.problem(), StatesFileProblem::Store(_)));
+    assert!(matches!(
+        error.problem(),
+        StatesFileProblem::File(FileProblem::Store(_))
+    ));
 }
 
 #[tokio::test]

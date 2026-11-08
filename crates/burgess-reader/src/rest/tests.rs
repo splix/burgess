@@ -22,6 +22,7 @@ use super::*;
 use crate::grpc::QueryApi;
 use crate::pages::PageLimits;
 use crate::queries::Queries;
+use crate::refs_lookup::RefsLookupConfig;
 use crate::test_support::{Days, at, days_ago, flush, messages, minted_on, noon, state_row};
 use crate::tree_lookup::TreeLookupConfig;
 
@@ -41,6 +42,7 @@ fn family(tree: TreeId, day: Day) -> Vec<StateRow> {
 fn router_over(days: &Days) -> Router {
     router(Arc::new(Queries {
         lookup: days.lookup(TreeLookupConfig::default()),
+        refs: days.refs_lookup(RefsLookupConfig::default()),
         limits: PageLimits::default(),
     }))
 }
@@ -334,6 +336,7 @@ async fn rest_and_grpc_answer_with_the_same_page() {
     .await;
     let queries = Arc::new(Queries {
         lookup: days.lookup(TreeLookupConfig::default()),
+        refs: days.refs_lookup(RefsLookupConfig::default()),
         limits: PageLimits::default(),
     });
     let grpc = QueryApi::new(queries.clone());

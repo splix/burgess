@@ -4,35 +4,9 @@
 //! contiguous range; references go to another, sorted by the outside id they
 //! are looked up by.
 
-use burgess_core::flow::{Subflow, TreeId};
-use burgess_core::storage::{StateEntry, StateRow};
-use burgess_core::wire::{Body, Record, UnixMillis};
-
-/// A row of the references file.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RefRow {
-    /// Kind of outside id.
-    pub ref_type: String,
-    /// The outside id.
-    pub domain_id: String,
-    /// Service that recorded the link.
-    pub service: String,
-    /// Category that recorded the link, if known.
-    pub category: Option<String>,
-    /// Tree of the linked flow.
-    pub tree: TreeId,
-    /// Subflow of the linked flow.
-    pub subflow: Subflow,
-    /// When the link was recorded, by the producer clock.
-    pub time: UnixMillis,
-}
-
-impl RefRow {
-    /// Sorting by this lets a lookup by outside id read one contiguous range.
-    pub(super) fn sort_key(&self) -> (&str, &str) {
-        (&self.ref_type, &self.domain_id)
-    }
-}
+use burgess_core::flow::Subflow;
+use burgess_core::storage::{RefRow, StateEntry, StateRow};
+use burgess_core::wire::{Body, Record};
 
 /// A record reshaped for the file it goes to.
 pub(super) enum Row {
@@ -87,7 +61,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use burgess_core::flow::FlowId;
-    use burgess_core::wire::{PayloadType, Reference, Split, State};
+    use burgess_core::wire::{PayloadType, Reference, Split, State, UnixMillis};
 
     use super::*;
 

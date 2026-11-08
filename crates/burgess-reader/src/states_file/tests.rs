@@ -28,6 +28,7 @@ use parquet::file::metadata::{KeyValue, PageIndexPolicy, ParquetMetaData, Parque
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterPropertiesBuilder};
 
 use super::*;
+use crate::parquet_file::{FileProblem, FileReadConfig};
 use crate::test_support::RecordingStore;
 
 const FIRST_MS: u64 = 1_793_000_000_000;
@@ -146,16 +147,17 @@ impl Fixture {
 
     /// A config whose first request fetches exactly the bytes after the last
     /// data page, so any data page fetched shows up as its own range.
-    fn tail_only_config(&self) -> StatesFileConfig {
+    fn tail_only_config(&self) -> FileReadConfig {
         let tail = self.bytes.len() - data_end(&self.metadata()) as usize;
-        StatesFileConfig {
+        FileReadConfig {
             tail_bytes: NonZeroUsize::new(tail).unwrap(),
+            ..FileReadConfig::default()
         }
     }
 
     async fn read_with(
         &self,
-        config: StatesFileConfig,
+        config: FileReadConfig,
         tree: TreeId,
     ) -> Result<Vec<StateRow>, TreeReadError> {
         StatesFileReader::new(self.store.clone(), config)
@@ -169,7 +171,7 @@ impl Fixture {
 
     async fn error(&self, tree: TreeId) -> TreeReadError {
         let error = self
-            .read_with(StatesFileConfig::default(), tree)
+            .read_with(FileReadConfig::default(), tree)
             .await
             .unwrap_err();
         assert_eq!(error.file(), &self.name);
@@ -475,7 +477,7 @@ async fn tree_inside_a_page_but_absent_gives_no_rows() {
 async fn reads_only_byte_ranges() {
     let fixture = Fixture::new(&[(tree(1), 300), (tree(2), 40)], 1 << 20).await;
     fixture
-        .read_with(StatesFileConfig::default(), tree(2))
+        .read_with(FileReadConfig::default(), tree(2))
         .await
         .unwrap();
     // Panics on any request for a whole object.
@@ -485,8 +487,9 @@ async fn reads_only_byte_ranges() {
 #[tokio::test]
 async fn a_short_tail_still_reads_the_tree() {
     let fixture = Fixture::new(&[(tree(1), 300), (tree(2), 40)], 1 << 20).await;
-    let config = StatesFileConfig {
+    let config = FileReadConfig {
         tail_bytes: NonZeroUsize::new(8).unwrap(),
+        ..FileReadConfig::default()
     };
     let rows = fixture.read_with(config, tree(2)).await.unwrap();
     assert_eq!(rows, fixture.expected(tree(2)));
@@ -500,12 +503,12 @@ async fn rejects_a_file_of_another_layout_version() {
         .await;
     assert!(matches!(
         newer.error(tree(2)).await.problem(),
-        StatesFileProblem::UnknownLayout { found: Some(version) } if version == "2"
+        StatesFileProblem::File(FileProblem::UnknownLayout { found: Some(version) }) if version == "2"
     ));
     let unversioned = written.rewritten(layout(None).build(), |batch| batch).await;
     assert!(matches!(
         unversioned.error(tree(2)).await.problem(),
-        StatesFileProblem::UnknownLayout { found: None }
+        StatesFileProblem::File(FileProblem::UnknownLayout { found: None })
     ));
 }
 
@@ -515,10 +518,10 @@ async fn rejects_a_file_with_other_rows_than_the_manifest_lists() {
     fixture.rows.pop();
     assert!(matches!(
         fixture.error(tree(2)).await.problem(),
-        StatesFileProblem::RowCount {
+        StatesFileProblem::File(FileProblem::RowCount {
             listed: 9,
             found: 10
-        }
+        })
     ));
 }
 
@@ -601,7 +604,7 @@ async fn rejects_a_tree_column_of_another_width() {
     .await;
     assert!(matches!(
         fixture.error(tree(2)).await.problem(),
-        StatesFileProblem::Column { column: "tree" }
+        StatesFileProblem::File(FileProblem::Column { column: "tree" })
     ));
 }
 
@@ -612,13 +615,13 @@ async fn a_missing_file_is_a_store_problem() {
         day: "20261107".parse().unwrap(),
         nnnn: UnixMillis::from(FIRST_MS + 1),
     };
-    let error = StatesFileReader::new(fixture.store.clone(), StatesFileConfig::default())
+    let error = StatesFileReader::new(fixture.store.clone(), FileReadConfig::default())
         .tree(&gone, fixture.stats(), tree(2))
         .await
         .unwrap_err();
     assert!(matches!(
         error.problem(),
-        StatesFileProblem::Store(object_store::Error::NotFound { .. })
+        StatesFileProblem::File(FileProblem::Store(object_store::Error::NotFound { .. }))
     ));
 }
 
@@ -671,6 +674,6 @@ async fn rejects_a_file_without_the_tree_column() {
         .await;
     assert!(matches!(
         fixture.error(tree(2)).await.problem(),
-        StatesFileProblem::Column { column: "tree" }
+        StatesFileProblem::File(FileProblem::Column { column: "tree" })
     ));
 }

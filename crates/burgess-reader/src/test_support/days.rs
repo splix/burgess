@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use burgess_core::flow::TreeId;
 use burgess_core::storage::{
-    Day, DayManifest, FileStats, FlushEntry, ObjectName, StateRow, StatesBounds,
+    Day, DayManifest, FileStats, FlushEntry, ObjectName, RefRow, StateRow, StatesBounds,
 };
 use burgess_core::wire::UnixMillis;
 use burgess_writer::batch::SortedBatch;
@@ -16,7 +16,10 @@ use object_store::{ObjectStore, ObjectStoreExt};
 
 use super::RecordingStore;
 use crate::manifests::{ManifestCache, ManifestCacheConfig};
-use crate::states_file::{StatesFileConfig, StatesFileReader};
+use crate::parquet_file::FileReadConfig;
+use crate::refs_file::RefsFileReader;
+use crate::refs_lookup::{RefsLookup, RefsLookupConfig};
+use crate::states_file::StatesFileReader;
 use crate::tree_lookup::{TreeLookup, TreeLookupConfig};
 
 pub(crate) fn noon(day: Day) -> Timestamp {
@@ -64,6 +67,24 @@ impl Days {
         put_day(&self.store.inner, day, flushes).await;
     }
 
+    /// Stores flushes of only references as the files and manifest of
+    /// `day`, oldest first. The references of a flush are sorted as the
+    /// writer sorts them.
+    pub(crate) async fn put_refs(&self, day: Day, flushes: &[&[RefRow]]) {
+        let flushes: Vec<Flush> = flushes
+            .iter()
+            .map(|refs| {
+                let mut refs = refs.to_vec();
+                refs.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+                Flush {
+                    states: Vec::new(),
+                    refs,
+                }
+            })
+            .collect();
+        put_flushes(&self.store.inner, day, &flushes).await;
+    }
+
     pub(crate) async fn put_object(&self, name: &ObjectName, bytes: Vec<u8>) {
         put_object(&self.store.inner, name, bytes).await;
     }
@@ -72,8 +93,16 @@ impl Days {
     /// manifests and the files.
     pub(crate) fn lookup(&self, config: TreeLookupConfig) -> TreeLookup {
         let manifests = ManifestCache::new(self.store.clone(), ManifestCacheConfig::default());
-        let files = StatesFileReader::new(self.store.clone(), StatesFileConfig::default());
+        let files = StatesFileReader::new(self.store.clone(), FileReadConfig::default());
         TreeLookup::new(Arc::new(manifests), files, config)
+    }
+
+    /// A refs lookup over the stored days, with default settings for the
+    /// manifests and the files.
+    pub(crate) fn refs_lookup(&self, config: RefsLookupConfig) -> RefsLookup {
+        let manifests = ManifestCache::new(self.store.clone(), ManifestCacheConfig::default());
+        let files = RefsFileReader::new(self.store.clone(), FileReadConfig::default());
+        RefsLookup::new(Arc::new(manifests), files, config)
     }
 
     /// The days whose manifest was requested, in request order.
@@ -100,20 +129,38 @@ impl Days {
 /// Stores `flushes` in `store` as the files and manifest of `day`, oldest
 /// first.
 pub(crate) async fn put_day(store: &dyn ObjectStore, day: Day, flushes: &[&[StateRow]]) {
+    let flushes: Vec<Flush> = flushes
+        .iter()
+        .map(|states| Flush {
+            states: states.to_vec(),
+            refs: Vec::new(),
+        })
+        .collect();
+    put_flushes(store, day, &flushes).await;
+}
+
+/// The sorted rows of one flush.
+struct Flush {
+    states: Vec<StateRow>,
+    refs: Vec<RefRow>,
+}
+
+async fn put_flushes(store: &dyn ObjectStore, day: Day, flushes: &[Flush]) {
     let writer = FileWriter::new(ParquetConfig::default()).unwrap();
     let mut manifest = DayManifest::new(day, "writer-1".parse().unwrap());
-    for (seq, states) in flushes.iter().enumerate() {
+    for (seq, flush) in flushes.iter().enumerate() {
         let nnnn = UnixMillis::from(at(day, seq as u64));
         let files = writer
             .write_batch(&SortedBatch {
-                states: states.to_vec(),
+                states: flush.states.clone(),
+                refs: flush.refs.clone(),
                 ..SortedBatch::default()
             })
             .unwrap();
         manifest.entries.push(FlushEntry {
             nnnn,
             seq: seq as u64,
-            states_bounds: bounds(states),
+            states_bounds: bounds(&flush.states),
             states: FileStats {
                 rows: files.states.rows as u64,
                 bytes: files.states.bytes.len() as u64,
@@ -123,8 +170,13 @@ pub(crate) async fn put_day(store: &dyn ObjectStore, day: Day, flushes: &[&[Stat
                 bytes: files.refs.bytes.len() as u64,
             },
         });
-        let name = ObjectName::StatesFile { day, nnnn };
-        put_object(store, &name, files.states.bytes).await;
+        put_object(
+            store,
+            &ObjectName::StatesFile { day, nnnn },
+            files.states.bytes,
+        )
+        .await;
+        put_object(store, &ObjectName::RefsFile { day, nnnn }, files.refs.bytes).await;
     }
     put_object(
         store,

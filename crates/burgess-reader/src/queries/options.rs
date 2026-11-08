@@ -2,11 +2,11 @@
 
 use std::num::NonZeroUsize;
 
-use burgess_api::grpc::{GetFlowRequest, GetTreeRequest, Order};
+use burgess_api::grpc::{GetFlowRequest, GetTreeRequest, ListRefsRequest, Order};
 use burgess_core::storage::Day;
 use jiff::Timestamp;
 
-use super::error::RequestError;
+use super::error::{RequestError, TimeField};
 use crate::pages::PageLimits;
 
 /// The options of a lookup request, as given.
@@ -21,7 +21,8 @@ pub(super) struct PageOptions<'a> {
 /// The options of a lookup request, checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct PageRequest {
-    /// The last day that the lookup must read.
+    /// The end of the request. A tree lookup reads the days up to the day
+    /// after it. A refs lookup also refuses the rows after it.
     pub(super) until: Option<Timestamp>,
     /// The number of rows that the page can hold.
     pub(super) limit: NonZeroUsize,
@@ -39,7 +40,10 @@ impl PageOptions<'_> {
         if self.cursor.is_some_and(|cursor| !cursor.is_empty()) {
             return Err(RequestError::Cursor);
         }
-        let until = self.until_ms.map(until).transpose()?;
+        let until = self
+            .until_ms
+            .map(|until_ms| time(TimeField::Until, until_ms))
+            .transpose()?;
         // A limit that is too large for usize is also over the maximum.
         let limit = self
             .limit
@@ -51,11 +55,15 @@ impl PageOptions<'_> {
     }
 }
 
-fn until(until_ms: i64) -> Result<Timestamp, RequestError> {
-    let until =
-        Timestamp::from_millisecond(until_ms).map_err(|_| RequestError::UntilMs { until_ms })?;
-    Day::utc(until).map_err(|source| RequestError::UntilDay { until, source })?;
-    Ok(until)
+/// The time `ms` of the option `field`, refused when no day can hold it.
+pub(super) fn time(field: TimeField, ms: i64) -> Result<Timestamp, RequestError> {
+    let time = Timestamp::from_millisecond(ms).map_err(|_| RequestError::TimeMs { field, ms })?;
+    Day::utc(time).map_err(|source| RequestError::TimeDay {
+        field,
+        time,
+        source,
+    })?;
+    Ok(time)
 }
 
 /// The requests that have the same options, with the same names.
@@ -74,4 +82,4 @@ macro_rules! page_options_of {
     )+};
 }
 
-page_options_of!(GetTreeRequest, GetFlowRequest);
+page_options_of!(GetTreeRequest, GetFlowRequest, ListRefsRequest);

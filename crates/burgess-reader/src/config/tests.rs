@@ -49,8 +49,9 @@ fn minimal_file_gets_every_default() {
         );
         assert_eq!(settings.pages, PageLimits::default());
         assert_eq!(settings.manifests, ManifestCacheConfig::default());
-        assert_eq!(settings.files, StatesFileConfig::default());
+        assert_eq!(settings.files, FileReadConfig::default());
         assert_eq!(settings.lookup, TreeLookupConfig::default());
+        assert_eq!(settings.refs, RefsLookupConfig::default());
     });
 }
 
@@ -73,11 +74,15 @@ retention_days = 7
 
 [files]
 tail_bytes = 4096
+refs_tail_bytes = 2048
 
 [lookup]
 stop_slack_days = 2
 days_before = 1
 concurrent_files = 8
+
+[refs]
+concurrent_days = 6
 "#;
     load_in_jail(toml, &[], |settings| {
         let settings = settings.unwrap();
@@ -98,12 +103,21 @@ concurrent_files = 8
             }
         );
         assert_eq!(settings.files.tail_bytes.get(), 4096);
+        assert_eq!(settings.files.refs_tail_bytes.get(), 2048);
         assert_eq!(
             settings.lookup,
             TreeLookupConfig {
                 stop_slack_days: 2,
                 days_before: 1,
                 concurrent_files: NonZeroUsize::new(8).unwrap(),
+            }
+        );
+        assert_eq!(
+            settings.refs,
+            RefsLookupConfig {
+                concurrent_days: NonZeroUsize::new(6).unwrap(),
+                concurrent_files: NonZeroUsize::new(8).unwrap(),
+                days_before: 1,
             }
         );
     });

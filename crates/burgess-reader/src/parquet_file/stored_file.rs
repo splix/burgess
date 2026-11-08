@@ -15,7 +15,7 @@ use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataR
 
 /// A file whose size the manifest already gave, so every request is a
 /// bounded range and the footer needs no HEAD or suffix request first.
-pub(super) struct StoredFile {
+pub(crate) struct StoredFile {
     store: Arc<dyn ObjectStore>,
     path: Path,
     size: u64,
@@ -25,7 +25,7 @@ pub(super) struct StoredFile {
 }
 
 impl StoredFile {
-    pub(super) fn new(
+    pub(crate) fn new(
         store: Arc<dyn ObjectStore>,
         path: Path,
         size: u64,

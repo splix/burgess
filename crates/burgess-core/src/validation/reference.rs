@@ -48,7 +48,11 @@ impl RefField {
     ///
     /// Characters are checked before the length, so a value that breaks both
     /// rules is reported for the one that cannot be fixed by shortening it.
-    fn check(self, value: &mut String) -> Result<(), ValidationError> {
+    ///
+    /// Lookups normalize the value they search for with the same rules, thus
+    /// a query finds what the writer stored, and a value that the writer
+    /// never stores is refused with the same words.
+    pub fn normalize(self, value: &mut String) -> Result<(), ValidationError> {
         trim_in_place(value);
         if value.is_empty() {
             return Err(ValidationError::Empty { field: self });
@@ -83,8 +87,8 @@ impl fmt::Display for RefField {
 /// `service` and `category` have no rules yet and are stored as sent.
 impl Validate for Reference {
     fn validate(&mut self, _limits: &Limits) -> Result<(), ValidationError> {
-        RefField::RefType.check(&mut self.ref_type)?;
-        RefField::DomainId.check(&mut self.domain_id)
+        RefField::RefType.normalize(&mut self.ref_type)?;
+        RefField::DomainId.normalize(&mut self.domain_id)
     }
 }
 

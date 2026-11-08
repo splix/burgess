@@ -12,6 +12,8 @@ use tokio::sync::watch;
 use crate::config::Settings;
 use crate::manifests::ManifestCache;
 use crate::queries::Queries;
+use crate::refs_file::RefsFileReader;
+use crate::refs_lookup::RefsLookup;
 use crate::states_file::StatesFileReader;
 use crate::tree_lookup::TreeLookup;
 use crate::{grpc, rest};
@@ -73,11 +75,12 @@ impl Server {
             "starting"
         );
         let store = settings.store.open_existing()?;
-        let manifests = ManifestCache::new(store.clone(), settings.manifests);
-        let files = StatesFileReader::new(store, settings.files);
-        let lookup = TreeLookup::new(Arc::new(manifests), files, settings.lookup);
+        let manifests = Arc::new(ManifestCache::new(store.clone(), settings.manifests));
+        let states = StatesFileReader::new(store.clone(), settings.files);
+        let refs = RefsFileReader::new(store, settings.files);
         let queries = Arc::new(Queries {
-            lookup,
+            lookup: TreeLookup::new(manifests.clone(), states, settings.lookup),
+            refs: RefsLookup::new(manifests, refs, settings.refs),
             limits: settings.pages,
         });
         let router = grpc::router(queries.clone()).merge(rest::router(queries));

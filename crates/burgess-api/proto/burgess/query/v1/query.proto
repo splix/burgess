@@ -88,9 +88,12 @@ message ListRefsRequest {
   // Only references recorded in this category.
   optional string category = 4;
   // The earliest reference time, in unix milliseconds. If not set, the
-  // lookup starts at the oldest day kept.
+  // lookup reads back to the oldest day kept.
   optional int64 since_ms = 5;
-  // The latest reference time, in unix milliseconds.
+  // The latest reference time, in unix milliseconds. References are stored
+  // by the day of the flush, thus the lookup also reads the day after. A
+  // reference that the writer stored two or more days after its time is
+  // not found.
   optional int64 until_ms = 6;
   // Same as in GetTreeRequest.
   optional uint32 limit = 7;

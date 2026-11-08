@@ -59,9 +59,9 @@ impl QueryService for QueryApi {
 
     async fn list_refs(
         &self,
-        _request: Request<ListRefsRequest>,
+        request: Request<ListRefsRequest>,
     ) -> Result<Response<Self::ListRefsStream>, Status> {
-        Err(Status::unimplemented("ListRefs is not served yet"))
+        answer(self.queries.list_refs(request.into_inner()).await)
     }
 }
 

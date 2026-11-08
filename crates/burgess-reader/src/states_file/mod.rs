@@ -7,14 +7,10 @@
 //! the statistics rule out costs no data page, and only that one request
 //! when the tail is long enough to hold the footer and the page index.
 
-mod config;
 mod decode;
 mod error;
 mod reader;
-mod selection;
-mod stored_file;
 
-pub use config::StatesFileConfig;
 pub use decode::InvalidRow;
 pub use error::{StatesFileProblem, TreeReadError};
 pub use reader::StatesFileReader;

@@ -6,7 +6,13 @@
 
 pub mod manifests;
 
+pub mod parquet_file;
+
 pub mod states_file;
+
+pub mod refs_file;
+
+pub mod refs_lookup;
 
 pub mod tree_lookup;
 

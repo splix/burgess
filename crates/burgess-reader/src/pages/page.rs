@@ -3,8 +3,8 @@
 use std::num::NonZeroUsize;
 
 use burgess_api::grpc::{Problem, TreeItem, TreeResponse};
-use burgess_core::report::error_chain;
 
+use super::cut::Cut;
 use super::row::tree_row;
 use crate::tree_lookup::FoundTree;
 
@@ -16,18 +16,14 @@ impl FoundTree {
     /// client can show the two together. Rows after the limit are not sent,
     /// thus their payloads are not checked.
     pub fn into_responses<R: TreeResponse>(self, limit: NonZeroUsize) -> Vec<R> {
-        let truncated = self.rows.len() > limit.get();
-        let mut responses: Vec<R> = self
-            .problems
-            .iter()
-            .map(|problem| problem_response(error_chain(problem)))
-            .collect();
-        for row in self.rows.into_iter().take(limit.get()) {
+        let cut = Cut::new(&self.problems, self.rows, limit);
+        let mut responses: Vec<R> = cut.problems.into_iter().map(problem_response).collect();
+        for row in cut.rows {
             let (row, problem) = tree_row(row);
             responses.extend(problem.map(problem_response));
             responses.push(R::from_item(TreeItem::Row(row)));
         }
-        if truncated {
+        if cut.truncated {
             responses.push(R::from_item(TreeItem::Truncated));
         }
         responses

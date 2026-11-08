@@ -11,6 +11,7 @@ use burgess_core::storage::{EntryKind, StateEntry, StateRow, StatesColumn};
 use burgess_core::wire::{PayloadType, UnixMillis};
 
 use super::error::StatesFileProblem;
+use crate::parquet_file::FileProblem;
 
 /// A row that breaks the rules the writer follows, so it cannot be returned
 /// as a state or a split.
@@ -77,9 +78,9 @@ impl<'a> TryFrom<&'a MapArray> for Meta<'a> {
     type Error = StatesFileProblem;
 
     fn try_from(map: &'a MapArray) -> Result<Self, Self::Error> {
-        let mismatch = StatesFileProblem::Column {
+        let mismatch = StatesFileProblem::from(FileProblem::Column {
             column: StatesColumn::Meta.name(),
-        };
+        });
         let keys = map.keys().as_any().downcast_ref::<StringArray>();
         let values = map.values().as_any().downcast_ref::<StringArray>();
         match (keys, values) {
@@ -174,7 +175,10 @@ fn column<A: Array + 'static>(
     batch
         .column_by_name(name.name())
         .and_then(|array| array.as_any().downcast_ref::<A>())
-        .ok_or(StatesFileProblem::Column {
-            column: name.name(),
-        })
+        .ok_or(
+            FileProblem::Column {
+                column: name.name(),
+            }
+            .into(),
+        )
 }

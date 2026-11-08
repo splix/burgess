@@ -10,14 +10,16 @@ mod file_layout;
 mod frame;
 mod manifest;
 mod object_name;
+mod ref_row;
 mod state_row;
 mod writer_id;
 
 pub use day::{Day, DayError};
-pub use file_layout::{SCHEMA_VERSION, SCHEMA_VERSION_KEY, StatesColumn};
+pub use file_layout::{RefsColumn, SCHEMA_VERSION, SCHEMA_VERSION_KEY, StatesColumn};
 pub use frame::FrameError;
 pub use manifest::{DayManifest, EntryProblem, FileStats, FlushEntry, ManifestError, StatesBounds};
 pub use object_name::ObjectName;
+pub use ref_row::RefRow;
 pub use state_row::{EntryKind, StateEntry, StateRow};
 pub use writer_id::{WriterId, WriterIdError};
 

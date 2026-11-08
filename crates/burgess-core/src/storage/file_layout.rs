@@ -53,3 +53,37 @@ impl StatesColumn {
         }
     }
 }
+
+/// A column of the refs file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefsColumn {
+    /// Kind of outside id; the first sort key.
+    RefType,
+    /// The outside id; the second sort key.
+    DomainId,
+    /// Service that recorded the link.
+    Service,
+    /// Category that recorded the link; null when not known.
+    Category,
+    /// Tree of the linked flow, as 12 raw bytes.
+    Tree,
+    /// Subflow of the linked flow.
+    Subflow,
+    /// Producer time.
+    Ts,
+}
+
+impl RefsColumn {
+    /// The column name in the file.
+    pub fn name(self) -> &'static str {
+        match self {
+            RefsColumn::RefType => "ref_type",
+            RefsColumn::DomainId => "domain_id",
+            RefsColumn::Service => "service",
+            RefsColumn::Category => "category",
+            RefsColumn::Tree => "tree",
+            RefsColumn::Subflow => "subflow",
+            RefsColumn::Ts => "ts",
+        }
+    }
+}
