@@ -10,6 +10,7 @@
 pub mod args;
 pub mod client;
 pub mod output;
+pub mod requests;
 pub mod run;
 pub mod server;
 

@@ -3,12 +3,12 @@
 use std::fmt;
 use std::io::{self, Write};
 
-use burgess_api::{Page, Row, RowKind};
+use burgess_api::{Page, RefRow, Row, RowKind};
 use burgess_core::flow::{FlowId, Subflow, TreeId};
 
 use super::compact::compact;
 
-/// What a listing is of, named in its first line.
+/// What a listing of tree rows is of, named in its first line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Heading {
     /// A whole tree.
@@ -26,10 +26,50 @@ impl fmt::Display for Heading {
     }
 }
 
+/// The states that a listing of states is of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatesHeading {
+    /// The service asked for.
+    pub service: String,
+    /// The category asked for.
+    pub category: String,
+}
+
+impl fmt::Display for StatesHeading {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "states of {}/{}",
+            printable(&self.service),
+            printable(&self.category)
+        )
+    }
+}
+
+/// The outside id that a listing of references is of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefsHeading {
+    /// The kind of the id.
+    pub ref_type: String,
+    /// The id.
+    pub domain_id: String,
+}
+
+impl fmt::Display for RefsHeading {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "references to {} {}",
+            printable(&self.ref_type),
+            quoted(&self.domain_id)
+        )
+    }
+}
+
 /// The heading, one aligned line per row, and a count.
 ///
-/// Rows of one lookup share their tree, so a row names only its subflow,
-/// as the last 8 hex characters of its flow id.
+/// Rows of a tree or a flow share their tree, so a row names only its
+/// subflow, as the last 8 hex characters of its flow id.
 pub(super) fn write(heading: Heading, page: &Page, out: &mut dyn Write) -> io::Result<()> {
     writeln!(out, "{heading}")?;
     writeln!(out)?;
@@ -50,10 +90,52 @@ pub(super) fn write(heading: Heading, page: &Page, out: &mut dyn Write) -> io::R
             detail(row),
         )?;
     }
-    if !page.rows.is_empty() {
+    end(page.rows.len(), out)
+}
+
+/// The heading, one line per state, and a count.
+///
+/// States come from any tree, so a state names its full flow id. They are
+/// all of the service and category of the heading, which a line does not
+/// repeat.
+pub(super) fn write_states(
+    heading: &StatesHeading,
+    page: &Page,
+    out: &mut dyn Write,
+) -> io::Result<()> {
+    writeln!(out, "{heading}")?;
+    writeln!(out)?;
+    for row in &page.rows {
+        writeln!(out, "{:.3}  {}  {}", row.ts, row.flow_id, detail(row))?;
+    }
+    end(page.rows.len(), out)
+}
+
+/// The heading, one line per reference: when, which flow, and who recorded
+/// it, then a count.
+pub(super) fn write_refs(
+    heading: &RefsHeading,
+    page: &Page<RefRow>,
+    out: &mut dyn Write,
+) -> io::Result<()> {
+    writeln!(out, "{heading}")?;
+    writeln!(out)?;
+    for row in &page.rows {
+        let recorder = match &row.category {
+            Some(category) => format!("{}/{}", printable(&row.service), printable(category)),
+            None => printable(&row.service),
+        };
+        writeln!(out, "{:.3}  {}  {}", row.ts, row.flow_id, recorder)?;
+    }
+    end(page.rows.len(), out)
+}
+
+/// The count after the rows.
+fn end(rows: usize, out: &mut dyn Write) -> io::Result<()> {
+    if rows > 0 {
         writeln!(out)?;
     }
-    writeln!(out, "{}", count(page.rows.len()))
+    writeln!(out, "{}", count(rows))
 }
 
 fn topic(row: &Row) -> String {

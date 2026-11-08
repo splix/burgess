@@ -52,6 +52,7 @@ tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-properties = "0.1"
+unicode-width = "0.2"
 
 prost-build = "0.14"
 protox = "0.9"

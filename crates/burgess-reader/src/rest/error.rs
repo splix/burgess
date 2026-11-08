@@ -116,8 +116,13 @@ impl From<QueryRejection> for RequestError {
 
 impl IntoResponse for RequestError {
     fn into_response(self) -> Response {
+        let where_column = match &self {
+            RequestError::Lookup(queries::RequestError::Where(filter)) => Some(filter.column),
+            _ => None,
+        };
         let body = ErrorBody {
             error: error_chain(&self),
+            where_column,
         };
         (self.status(), Json(body)).into_response()
     }

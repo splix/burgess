@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use burgess_api::grpc::WHERE_COLUMN;
 use burgess_api::grpc::query_service_server::QueryService;
 use burgess_api::grpc::{
     GetFlowRequest, GetFlowResponse, GetTreeRequest, GetTreeResponse, ListRefsRequest,
@@ -9,6 +10,7 @@ use burgess_api::grpc::{
 };
 use burgess_core::report::error_chain;
 use futures::stream;
+use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status};
 
 use crate::queries::{Queries, RequestError};
@@ -67,7 +69,18 @@ impl QueryService for QueryApi {
 
 /// Each request error is a fault of the request.
 fn answer<R>(responses: Result<Vec<R>, RequestError>) -> Result<Response<Answer<R>>, Status> {
-    let responses = responses.map_err(|error| Status::invalid_argument(error_chain(&error)))?;
+    let responses = responses.map_err(|error| refusal(&error))?;
     let messages: Vec<_> = responses.into_iter().map(Ok).collect();
     Ok(Response::new(stream::iter(messages)))
+}
+
+/// The status of a refused request.
+fn refusal(error: &RequestError) -> Status {
+    let mut status = Status::invalid_argument(error_chain(error));
+    if let RequestError::Where(filter) = error {
+        status
+            .metadata_mut()
+            .insert(WHERE_COLUMN, MetadataValue::from(filter.column));
+    }
+    status
 }

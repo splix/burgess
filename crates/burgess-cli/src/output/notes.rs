@@ -6,7 +6,7 @@ use burgess_api::Page;
 
 /// Says on `err` why rows may be missing: each problem the service met, and
 /// whether the page was cut at its limit.
-pub fn write_notes(page: &Page, err: &mut dyn Write) -> io::Result<()> {
+pub fn write_notes<R>(page: &Page<R>, err: &mut dyn Write) -> io::Result<()> {
     for problem in &page.problems {
         writeln!(err, "problem: {problem}")?;
     }

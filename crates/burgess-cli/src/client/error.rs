@@ -2,6 +2,9 @@
 
 use std::error::Error;
 use std::fmt;
+use std::num::NonZeroUsize;
+
+use burgess_api::grpc::WHERE_COLUMN;
 
 use tonic::{Code, Status};
 
@@ -32,6 +35,9 @@ pub enum ClientError {
     /// The service refused the request as it was written.
     #[error("the query service refused the request")]
     Refused {
+        /// The column of the `where` filter that breaks the grammar, when
+        /// that is why.
+        where_column: Option<NonZeroUsize>,
         /// The words of the service.
         #[source]
         cause: StatusCause,
@@ -54,6 +60,7 @@ impl ClientError {
     pub(super) fn from_status(status: Status, server: &ServerAddress) -> Self {
         match status.code() {
             Code::InvalidArgument => ClientError::Refused {
+                where_column: where_column(&status),
                 cause: StatusCause(status),
             },
             Code::Unavailable => ClientError::Unavailable {
@@ -73,6 +80,19 @@ impl ClientError {
     pub fn is_usage(&self) -> bool {
         matches!(self, ClientError::Refused { .. })
     }
+}
+
+/// The column that the service tells for a `where` that breaks the
+/// grammar. A service that does not tell it, or tells one that cannot be
+/// read, gives `None`, and the message is then shown alone.
+fn where_column(status: &Status) -> Option<NonZeroUsize> {
+    status
+        .metadata()
+        .get(WHERE_COLUMN)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()
 }
 
 /// A gRPC status as the cause of an error. Its text is only the message,

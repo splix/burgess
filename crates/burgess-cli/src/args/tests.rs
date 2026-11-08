@@ -187,3 +187,123 @@ fn an_unknown_output_is_refused() {
         ErrorKind::InvalidValue
     );
 }
+
+#[test]
+fn states_take_repeated_labels_in_their_order() {
+    let Command::States { states, .. } = parse(&[
+        "states",
+        "checkout",
+        "payment",
+        "--meta",
+        "region=eu",
+        "--meta",
+        "note=a=b",
+        "--meta",
+        "empty=",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!("a states lookup");
+    };
+    assert_eq!(
+        states.meta,
+        [
+            ("region".to_string(), "eu".to_string()),
+            ("note".to_string(), "a=b".to_string()),
+            ("empty".to_string(), String::new()),
+        ]
+    );
+}
+
+#[test]
+fn a_label_without_a_key_and_a_value_is_refused() {
+    for label in ["region", "=eu"] {
+        let error = refused(&["states", "a", "b", "--meta", label]);
+        assert_eq!(error.kind(), ErrorKind::ValueValidation, "{label}");
+    }
+}
+
+#[test]
+fn states_take_an_order_by_its_name() {
+    for (name, order) in [("asc", TsOrder::Asc), ("desc", TsOrder::Desc)] {
+        let Command::States { states, .. } = parse(&["states", "a", "b", "--order", name])
+            .unwrap()
+            .command
+        else {
+            panic!("a states lookup");
+        };
+        assert_eq!(states.order, Some(order));
+    }
+    assert_eq!(
+        refused(&["states", "a", "b", "--order", "up"]).kind(),
+        ErrorKind::InvalidValue
+    );
+}
+
+#[test]
+fn a_window_takes_times_in_either_form() {
+    let Command::States { window, .. } = parse(&[
+        "states",
+        "a",
+        "b",
+        "--since",
+        "1793880000000",
+        "--until",
+        "2026-11-05T13:00:00+01:00",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!("a states lookup");
+    };
+    assert_eq!(window.since, window.until);
+    assert_eq!(
+        refused(&["states", "a", "b", "--since", "yesterday"]).kind(),
+        ErrorKind::ValueValidation
+    );
+}
+
+#[test]
+fn references_take_no_option_that_the_service_refuses_for_them() {
+    let Command::Refs {
+        ref_type,
+        domain_id,
+        service,
+        ..
+    } = parse(&["refs", "order_id", "ORD 1", "--service", "checkout"])
+        .unwrap()
+        .command
+    else {
+        panic!("a refs lookup");
+    };
+    assert_eq!(
+        (ref_type.as_str(), domain_id.as_str()),
+        ("order_id", "ORD 1")
+    );
+    assert_eq!(service.as_deref(), Some("checkout"));
+    for option in ["--order", "--where", "--meta"] {
+        let error = refused(&["refs", "order_id", "ORD-1", option, "x"]);
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument, "{option}");
+    }
+}
+
+#[test]
+fn the_help_of_each_command_can_be_built() {
+    Cli::command().debug_assert();
+}
+
+#[test]
+fn a_label_is_trimmed_after_the_split() {
+    let Command::States { states, .. } = parse(&["states", "a", "b", "--meta", " region = e u "])
+        .unwrap()
+        .command
+    else {
+        panic!("a states lookup");
+    };
+    assert_eq!(states.meta, [("region".to_string(), "e u".to_string())]);
+    assert_eq!(
+        refused(&["states", "a", "b", "--meta", "  = eu"]).kind(),
+        ErrorKind::ValueValidation
+    );
+}

@@ -343,3 +343,24 @@ async fn an_outside_id_with_any_character_can_be_given_in_the_query() {
     assert_eq!(page.rows.len(), 1);
     assert_eq!(page.rows[0].domain_id, odd);
 }
+
+#[tokio::test]
+async fn a_where_that_breaks_the_grammar_tells_its_column_in_the_body() {
+    let days = Days::new();
+
+    let by_query: ErrorBody = get_json(
+        router_over(&days),
+        "/v1/states?service=a&category=b&where=%20%20amount%20%3E",
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+    let other: ErrorBody = get_json(
+        router_over(&days),
+        "/v1/states?service=a&category=b&limit=0",
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(by_query.where_column, Some(11));
+    assert_eq!(other.where_column, None);
+}

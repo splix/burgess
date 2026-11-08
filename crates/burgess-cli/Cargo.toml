@@ -14,12 +14,14 @@ burgess-api.workspace = true
 burgess-core.workspace = true
 clap.workspace = true
 jiff.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 tonic = { workspace = true, features = ["channel", "tls-native-roots", "tls-ring"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+unicode-width.workspace = true
 
 [dev-dependencies]
 serde_json = { workspace = true, features = ["raw_value"] }

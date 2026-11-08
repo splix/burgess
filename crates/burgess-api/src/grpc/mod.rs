@@ -16,5 +16,10 @@ pub use tree_responses::{TreeItem, TreeResponse};
 
 include!(concat!(env!("OUT_DIR"), "/burgess.query.v1.rs"));
 
+/// The key of the status metadata that holds the column of a `where` that
+/// breaks the grammar, counted in characters from 1. A client can then
+/// point to it without reading the words of the message.
+pub const WHERE_COLUMN: &str = "burgess-where-column";
+
 #[cfg(test)]
 mod tests;

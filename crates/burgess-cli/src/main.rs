@@ -1,10 +1,18 @@
 //! `burgess`, the command line client of the query service. The
 //! `burgess_cli` library explains what it does.
 //!
-//! Usage: `burgess [--server <url>] [-o listing|jsonl] tree|flow <id>
-//! [--until <time>] [--limit <rows>]`. The server may also come from
-//! `BURGESS_SERVER`; logging follows `RUST_LOG` (default `warn`) and goes to
-//! standard error.
+//! Usage: `burgess [--server <url>] [-o listing|jsonl] <command>`, where the
+//! command is one of:
+//!
+//! - `tree|flow <id> [--until <time>] [--limit <rows>]`
+//! - `states <service> <category> [--where <expression>]
+//!   [--meta <key=value>]... [--order asc|desc] [--since <time>]
+//!   [--until <time>] [--limit <rows>]`
+//! - `refs <ref_type> <domain_id> [--service <name>] [--category <name>]
+//!   [--since <time>] [--until <time>] [--limit <rows>]`
+//!
+//! The server may also come from `BURGESS_SERVER`; logging follows
+//! `RUST_LOG` (default `warn`) and goes to standard error.
 //!
 //! Exit codes: 0 when every row was read, 1 when the lookup failed, 2 for a
 //! command line the CLI or the service refused, 3 when rows were printed but
@@ -14,7 +22,7 @@ use std::io;
 use std::process::ExitCode;
 
 use burgess_cli::args::Cli;
-use burgess_cli::run::{Outcome, RunError, run};
+use burgess_cli::run::{Outcome, run};
 use burgess_core::report::error_chain;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -39,9 +47,13 @@ async fn main() -> ExitCode {
         Ok(Outcome::Partial) => ExitCode::from(PARTIAL),
         Err(error) => {
             eprintln!("burgess: {}", error_chain(&error));
-            match error {
-                RunError::Client(error) if error.is_usage() => ExitCode::from(USAGE),
-                _ => ExitCode::FAILURE,
+            if let Some(pointer) = error.pointer() {
+                eprintln!("{pointer}");
+            }
+            if error.is_usage() {
+                ExitCode::from(USAGE)
+            } else {
+                ExitCode::FAILURE
             }
         }
     }

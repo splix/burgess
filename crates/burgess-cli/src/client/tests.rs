@@ -10,6 +10,8 @@ use burgess_core::report::error_chain;
 use jiff::Timestamp;
 
 use super::*;
+use crate::args::PageArgs;
+use crate::requests::{flow_request, tree_request};
 use crate::server::ServerAddress;
 use crate::test_support::{Answer, MockService, Received};
 
@@ -36,8 +38,8 @@ fn client(service: &MockService) -> QueryClient {
     QueryClient::new(service.server.clone()).unwrap()
 }
 
-fn tree() -> Lookup {
-    Lookup::Tree(TREE.parse().unwrap())
+fn tree(page: PageArgs) -> GetTreeRequest {
+    tree_request(TREE.parse().unwrap(), page)
 }
 
 fn no_options() -> PageArgs {
@@ -49,10 +51,7 @@ fn no_options() -> PageArgs {
 
 async fn lookup_error(answer: Answer) -> (ClientError, ServerAddress) {
     let service = MockService::start(answer).await;
-    let error = client(&service)
-        .page(tree(), no_options())
-        .await
-        .unwrap_err();
+    let error = client(&service).tree(tree(no_options())).await.unwrap_err();
     (error, service.server)
 }
 
@@ -64,7 +63,7 @@ async fn asks_for_a_tree_with_its_options_and_reads_the_page() {
         limit: NonZeroU32::new(20),
     };
 
-    let page = client(&service).page(tree(), options).await.unwrap();
+    let page = client(&service).tree(tree(options)).await.unwrap();
 
     assert_eq!(page.rows.len(), 1);
     assert_eq!(
@@ -74,7 +73,9 @@ async fn asks_for_a_tree_with_its_options_and_reads_the_page() {
     assert_eq!(
         service.received(),
         [Received::Tree(GetTreeRequest {
-            tree: Some(Tree::TreeId(TREE.into())),
+            tree: Some(burgess_api::grpc::get_tree_request::Tree::TreeId(
+                TREE.into()
+            )),
             until_ms: Some(1_793_880_000_000),
             limit: Some(20),
             ..Default::default()
@@ -86,8 +87,8 @@ async fn asks_for_a_tree_with_its_options_and_reads_the_page() {
 async fn asks_for_a_flow_without_options() {
     let service = MockService::start(Answer::rows(vec![state()])).await;
 
-    let lookup = Lookup::Flow(FLOW.parse().unwrap());
-    client(&service).page(lookup, no_options()).await.unwrap();
+    let request = flow_request(FLOW.parse().unwrap(), no_options());
+    client(&service).flow(request).await.unwrap();
 
     assert_eq!(
         service.received(),
@@ -109,7 +110,7 @@ async fn problems_and_a_cut_reach_the_page() {
     ]))
     .await;
 
-    let page = client(&service).page(tree(), no_options()).await.unwrap();
+    let page = client(&service).tree(tree(no_options())).await.unwrap();
 
     assert_eq!(page.problems, ["the manifest of 20261105 is invalid"]);
     assert_eq!(page.rows.len(), 1);
@@ -149,7 +150,7 @@ async fn an_answer_that_stops_early_keeps_its_rows_and_tells_why() {
     ]))
     .await;
 
-    let page = client(&service).page(tree(), no_options()).await.unwrap();
+    let page = client(&service).tree(tree(no_options())).await.unwrap();
 
     assert_eq!(page.rows.len(), 1);
     assert_eq!(
@@ -181,7 +182,7 @@ async fn a_service_that_is_not_there_is_reported_with_its_address_and_cause() {
 
     let error = QueryClient::new(address.clone())
         .unwrap()
-        .page(tree(), no_options())
+        .tree(tree(no_options()))
         .await
         .unwrap_err();
 

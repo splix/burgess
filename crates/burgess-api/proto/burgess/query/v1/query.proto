@@ -65,8 +65,9 @@ message ListStatesRequest {
   // A filter expression on the payload, for example `amount > 100`,
   // `tx.inputs[].value >= 1000` or `fee in 10..=20`. A value of another
   // JSON type never matches, and one element of each `[]` is enough. An
-  // expression that breaks the grammar is refused with INVALID_ARGUMENT
-  // and the column of the error. Empty or only spaces is no filter.
+  // expression that breaks the grammar is refused with INVALID_ARGUMENT,
+  // and the status metadata `burgess-where-column` holds the column of the
+  // error, in characters from 1. Empty or only spaces is no filter.
   optional string where = 3;
   // Labels that each state must have, with these values.
   map<string, string> meta = 4;

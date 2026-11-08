@@ -946,3 +946,34 @@ async fn what_the_refs_lookup_could_not_read_comes_before_the_references() {
         "{items:?}"
     );
 }
+
+#[tokio::test]
+async fn a_where_that_breaks_the_grammar_tells_its_column_in_the_metadata() {
+    let days = Days::new();
+    let request = ListStatesRequest {
+        r#where: Some("  amount >".into()),
+        ..states_request()
+    };
+    let other = ListStatesRequest {
+        limit: Some(0),
+        ..states_request()
+    };
+
+    let status = api(&days)
+        .list_states(Request::new(request))
+        .await
+        .expect_err("a refusal");
+    let without = api(&days)
+        .list_states(Request::new(other))
+        .await
+        .expect_err("a refusal");
+
+    let column = status.metadata().get(burgess_api::grpc::WHERE_COLUMN);
+    assert_eq!(column.and_then(|column| column.to_str().ok()), Some("11"));
+    assert!(
+        without
+            .metadata()
+            .get(burgess_api::grpc::WHERE_COLUMN)
+            .is_none()
+    );
+}

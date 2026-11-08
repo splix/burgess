@@ -4,20 +4,18 @@ mod error;
 
 pub use error::{ClientError, StatusCause};
 
-use std::fmt;
 use std::time::Duration;
 
-use burgess_api::Page;
-use burgess_api::grpc::get_tree_request::Tree;
 use burgess_api::grpc::query_service_client::QueryServiceClient;
-use burgess_api::grpc::{GetFlowRequest, GetTreeRequest, TreeResponse};
-use burgess_core::flow::{FlowId, TreeId};
+use burgess_api::grpc::{
+    AnswerMessage, GetFlowRequest, GetTreeRequest, ListRefsRequest, ListStatesRequest,
+};
+use burgess_api::{Page, RefRow};
 use burgess_core::report::error_chain;
 use tonic::codec::Streaming;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tonic::{Response, Status};
 
-use crate::args::PageArgs;
 use crate::server::ServerAddress;
 
 /// A lookup can take long when it reads many files, thus only the connect
@@ -30,24 +28,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// cap is necessary: the decoder reserves the size that a message header
 /// gives before the message comes.
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
-
-/// What to look up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Lookup {
-    /// All rows of a tree.
-    Tree(TreeId),
-    /// All rows of a flow and of the flows below it.
-    Flow(FlowId),
-}
-
-impl fmt::Display for Lookup {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Lookup::Tree(tree) => write!(f, "tree {tree}"),
-            Lookup::Flow(flow) => write!(f, "flow {flow}"),
-        }
-    }
-}
 
 /// A client of one query service.
 #[derive(Debug, Clone)]
@@ -78,32 +58,64 @@ impl QueryClient {
         Ok(QueryClient { server, grpc })
     }
 
-    /// The page that the service answers `lookup` with.
-    pub async fn page(&self, lookup: Lookup, page: PageArgs) -> Result<Page, ClientError> {
-        let mut grpc = self.grpc.clone();
-        let until_ms = page.until.map(|until| until.as_millisecond());
-        let limit = page.limit.map(|limit| limit.get());
-        tracing::debug!(server = %self.server, %lookup, ?until_ms, ?limit, "asking the query service");
-        match lookup {
-            Lookup::Tree(tree) => {
-                let request = GetTreeRequest {
-                    tree: Some(Tree::TreeId(tree.to_string())),
-                    until_ms,
-                    limit,
-                    ..Default::default()
-                };
-                self.collect(grpc.get_tree(request).await).await
-            }
-            Lookup::Flow(flow) => {
-                let request = GetFlowRequest {
-                    flow_id: flow.to_string(),
-                    until_ms,
-                    limit,
-                    ..Default::default()
-                };
-                self.collect(grpc.get_flow(request).await).await
-            }
-        }
+    /// The page of rows that the service answers `request` with.
+    pub async fn tree(&self, request: GetTreeRequest) -> Result<Page, ClientError> {
+        tracing::debug!(
+            server = %self.server,
+            tree = ?request.tree,
+            until_ms = ?request.until_ms,
+            limit = ?request.limit,
+            "asking the query service for a tree"
+        );
+        let answer = self.grpc.clone().get_tree(request).await;
+        self.collect(answer).await
+    }
+
+    /// The page of rows that the service answers `request` with.
+    pub async fn flow(&self, request: GetFlowRequest) -> Result<Page, ClientError> {
+        tracing::debug!(
+            server = %self.server,
+            flow = %request.flow_id,
+            until_ms = ?request.until_ms,
+            limit = ?request.limit,
+            "asking the query service for a flow"
+        );
+        let answer = self.grpc.clone().get_flow(request).await;
+        self.collect(answer).await
+    }
+
+    /// The page of states that the service answers `request` with.
+    pub async fn states(&self, request: ListStatesRequest) -> Result<Page, ClientError> {
+        // The window is logged, since a window of a default size is the
+        // usual cause of an empty answer. The filter and the labels can
+        // hold data about a person, thus they are not.
+        tracing::debug!(
+            server = %self.server,
+            service = %request.service,
+            category = %request.category,
+            since_ms = ?request.since_ms,
+            until_ms = ?request.until_ms,
+            limit = ?request.limit,
+            order = request.order,
+            "asking the query service for states"
+        );
+        let answer = self.grpc.clone().list_states(request).await;
+        self.collect(answer).await
+    }
+
+    /// The page of references that the service answers `request` with.
+    pub async fn refs(&self, request: ListRefsRequest) -> Result<Page<RefRow>, ClientError> {
+        // The outside id can be data about a person, thus it is not logged.
+        tracing::debug!(
+            server = %self.server,
+            ref_type = %request.ref_type,
+            since_ms = ?request.since_ms,
+            until_ms = ?request.until_ms,
+            limit = ?request.limit,
+            "asking the query service for references"
+        );
+        let answer = self.grpc.clone().list_refs(request).await;
+        self.collect(answer).await
     }
 
     /// The page of all messages of the answer.
@@ -111,10 +123,10 @@ impl QueryClient {
     /// If the stream stops with an error after some messages, the page keeps
     /// them and tells why it is not complete. An error before the first
     /// message is an error of the lookup, as if no stream had started.
-    async fn collect<R: TreeResponse>(
+    async fn collect<M: AnswerMessage>(
         &self,
-        answer: Result<Response<Streaming<R>>, Status>,
-    ) -> Result<Page, ClientError> {
+        answer: Result<Response<Streaming<M>>, Status>,
+    ) -> Result<Page<M::Row>, ClientError> {
         let mut stream = answer.map_err(|status| self.error(status))?.into_inner();
         let mut responses = Vec::new();
         let stopped = loop {

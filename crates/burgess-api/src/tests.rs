@@ -155,9 +155,22 @@ fn a_page_lists_its_problems() {
 fn an_error_is_one_message() {
     let body = ErrorBody {
         error: "bad id".into(),
+        where_column: None,
     };
     assert_eq!(
         serde_json::to_value(body).unwrap(),
         json!({"error": "bad id"})
+    );
+}
+
+#[test]
+fn an_error_of_the_filter_tells_its_column() {
+    let body = ErrorBody {
+        error: "invalid where: expected a path at column 3".into(),
+        where_column: Some(3),
+    };
+    assert_eq!(
+        serde_json::to_value(body).unwrap(),
+        json!({"error": "invalid where: expected a path at column 3", "where_column": 3})
     );
 }

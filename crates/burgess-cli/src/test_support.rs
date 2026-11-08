@@ -22,6 +22,10 @@ pub(crate) enum Answer {
     /// The service sends these messages, and an error in the list stops
     /// the stream there.
     Stream(Vec<Result<TreeItem, Status>>),
+    /// The service answers ListStates with these messages.
+    States(Vec<ListStatesResponse>),
+    /// The service answers ListRefs with these messages.
+    Refs(Vec<ListRefsResponse>),
 }
 
 impl Answer {
@@ -41,6 +45,8 @@ impl Answer {
 pub(crate) enum Received {
     Tree(GetTreeRequest),
     Flow(GetFlowRequest),
+    States(ListStatesRequest),
+    Refs(ListRefsRequest),
 }
 
 /// A running service, which stops when the test ends.
@@ -95,7 +101,25 @@ impl Fixed {
                     .collect();
                 Ok(Response::new(tokio_stream::iter(messages)))
             }
+            _ => Err(Status::unimplemented("not this answer")),
         }
+    }
+
+    /// The fixed messages for a list lookup, which `messages` picks from
+    /// the answer.
+    fn list<R: Clone>(
+        &self,
+        received: Received,
+        messages: impl Fn(&Answer) -> Option<&Vec<R>>,
+    ) -> Result<Response<Messages<R>>, Status> {
+        self.received.lock().unwrap().push(received);
+        if let Answer::Refuse(status) = &self.answer {
+            return Err(status.clone());
+        }
+        let messages =
+            messages(&self.answer).ok_or_else(|| Status::unimplemented("not this answer"))?;
+        let messages: Vec<_> = messages.iter().cloned().map(Ok).collect();
+        Ok(Response::new(tokio_stream::iter(messages)))
     }
 }
 
@@ -122,15 +146,27 @@ impl QueryService for Fixed {
 
     async fn list_states(
         &self,
-        _request: Request<ListStatesRequest>,
+        request: Request<ListStatesRequest>,
     ) -> Result<Response<Self::ListStatesStream>, Status> {
-        Err(Status::unimplemented("not in the mock"))
+        self.list(
+            Received::States(request.into_inner()),
+            |answer| match answer {
+                Answer::States(messages) => Some(messages),
+                _ => None,
+            },
+        )
     }
 
     async fn list_refs(
         &self,
-        _request: Request<ListRefsRequest>,
+        request: Request<ListRefsRequest>,
     ) -> Result<Response<Self::ListRefsStream>, Status> {
-        Err(Status::unimplemented("not in the mock"))
+        self.list(
+            Received::Refs(request.into_inner()),
+            |answer| match answer {
+                Answer::Refs(messages) => Some(messages),
+                _ => None,
+            },
+        )
     }
 }
