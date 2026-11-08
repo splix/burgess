@@ -66,19 +66,19 @@ impl Visitor<'_> for TextVisitor {
 }
 
 /// A text setting.
-pub(super) fn text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+pub fn text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     Text::deserialize(deserializer).map(|text| text.0)
 }
 
 /// An optional text setting.
-pub(super) fn optional_text<'de, D: Deserializer<'de>>(
+pub fn optional_text<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<String>, D::Error> {
     Option::<Text>::deserialize(deserializer).map(|text| text.map(|text| text.0))
 }
 
 /// A map of text settings.
-pub(super) fn text_map<'de, D: Deserializer<'de>>(
+pub fn text_map<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<BTreeMap<String, String>, D::Error> {
     BTreeMap::<String, Text>::deserialize(deserializer)

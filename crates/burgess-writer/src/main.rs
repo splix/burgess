@@ -12,8 +12,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use burgess_core::report::error_chain;
 use burgess_writer::config::Settings;
-use burgess_writer::error_chain;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 

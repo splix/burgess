@@ -1,18 +1,12 @@
-//! Test doubles shared by the reader's tests.
+//! A store that remembers what the reader asked of it.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use burgess_core::flow::{Subflow, TreeId};
-use burgess_core::storage::{Day, StateEntry, StateRow};
-use burgess_core::wire::{PayloadType, UnixMillis};
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use jiff::civil::Date;
-use jiff::{Span, Timestamp};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
@@ -174,38 +168,4 @@ impl ObjectStore for RecordingStore {
     ) -> object_store::Result<()> {
         self.inner.rename_opts(from, to, options).await
     }
-}
-
-/// The day `days` before today by the host clock, which the reader also
-/// uses for retention, so test days stay within it whenever the tests run.
-pub(crate) fn days_ago(days: i64) -> Day {
-    let today = Date::from(Day::utc(Timestamp::now()).unwrap());
-    Day::try_from(today.checked_sub(Span::new().days(days)).unwrap()).unwrap()
-}
-
-/// A row of `subflow` in `tree` at `time` in unix milliseconds: a split to
-/// `child`, or a state when there is none.
-pub(crate) fn state_row(tree: TreeId, subflow: u32, time: u64, child: Option<u32>) -> StateRow {
-    StateRow {
-        tree,
-        subflow: Subflow::from(subflow),
-        time: UnixMillis::from(time),
-        service: "checkout".into(),
-        category: "step".into(),
-        entry: match child {
-            Some(child) => StateEntry::Split {
-                child: Subflow::from(child),
-            },
-            None => StateEntry::State {
-                meta: BTreeMap::new(),
-                payload_type: PayloadType::Json,
-                payload: b"{}".to_vec(),
-            },
-        },
-    }
-}
-
-/// The subflow of each row, in order.
-pub(crate) fn subflows(rows: &[StateRow]) -> Vec<u32> {
-    rows.iter().map(|row| u32::from(row.subflow)).collect()
 }

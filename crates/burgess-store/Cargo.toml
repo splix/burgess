@@ -1,0 +1,16 @@
+[package]
+name = "burgess-store"
+description = "Settings of the object store Burgess keeps its files in, shared by the writer and the query service."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+object_store = { workspace = true, features = ["aws", "fs"] }
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

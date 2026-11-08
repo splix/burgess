@@ -5,5 +5,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+burgess-core.workspace = true
+jiff = { workspace = true, features = ["serde"] }
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
+
 [lints]
 workspace = true

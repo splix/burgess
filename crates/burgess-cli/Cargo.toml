@@ -9,5 +9,21 @@ rust-version.workspace = true
 name = "burgess"
 path = "src/main.rs"
 
+[dependencies]
+burgess-api.workspace = true
+burgess-core.workspace = true
+clap.workspace = true
+jiff.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["raw_value"] }
+wiremock.workspace = true
+
 [lints]
 workspace = true

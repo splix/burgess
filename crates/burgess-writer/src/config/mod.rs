@@ -15,10 +15,8 @@
 //! unknown settings.
 
 mod file;
-mod store;
-mod text;
 
-pub use store::StoreConfig;
+pub use burgess_store::StoreConfig;
 
 use std::path::Path;
 

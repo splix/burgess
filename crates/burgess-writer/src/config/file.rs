@@ -5,10 +5,10 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use burgess_core::validation::Limits;
+use burgess_store::StoreConfig;
+use burgess_store::text::{text, text_map};
 use serde::Deserialize;
 
-use super::store::StoreConfig;
-use super::text::{text, text_map};
 use super::{ConfigError, Settings};
 use crate::batch::BatchConfig;
 use crate::parquet_files::ParquetConfig;

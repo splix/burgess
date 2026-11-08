@@ -21,16 +21,3 @@ pub mod app;
 
 #[cfg(test)]
 mod test_support;
-
-/// An error with all its sources, `outer: inner: innermost`, for log lines:
-/// the outermost message alone rarely says what actually went wrong.
-pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
-    let mut chain = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        chain.push_str(": ");
-        chain.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    chain
-}

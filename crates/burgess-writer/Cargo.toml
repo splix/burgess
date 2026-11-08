@@ -14,12 +14,13 @@ test-util = []
 arrow-array.workspace = true
 arrow-schema.workspace = true
 burgess-core.workspace = true
+burgess-store.workspace = true
 bytes.workspace = true
 figment.workspace = true
 futures.workspace = true
 humantime-serde.workspace = true
 jiff.workspace = true
-object_store = { workspace = true, features = ["aws", "fs"] }
+object_store.workspace = true
 parquet.workspace = true
 rdkafka.workspace = true
 serde.workspace = true

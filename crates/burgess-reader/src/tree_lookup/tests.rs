@@ -1,45 +1,17 @@
 //! Lookups over days of real files and manifests, checking both the rows
 //! returned and which objects were requested.
 
-use std::sync::Arc;
-
 use burgess_core::flow::{FlowId, Subflow, TreeId};
-use burgess_core::storage::{
-    Day, DayManifest, FileStats, FlushEntry, ObjectName, StateRow, StatesBounds,
-};
+use burgess_core::storage::{Day, ObjectName, StateRow};
 use burgess_core::wire::UnixMillis;
-use burgess_writer::batch::SortedBatch;
-use burgess_writer::parquet_files::{FileWriter, ParquetConfig};
 use jiff::Timestamp;
-use jiff::civil::Date;
 use object_store::ObjectStoreExt;
 use object_store::path::Path;
 
 use super::*;
-use crate::manifests::{ManifestCache, ManifestCacheConfig, ManifestReadError};
-use crate::states_file::{StatesFileConfig, StatesFileProblem, StatesFileReader};
-use crate::test_support::{RecordingStore, days_ago, state_row, subflows};
-
-fn noon(day: Day) -> Timestamp {
-    Date::from(day)
-        .at(12, 0, 0, 0)
-        .to_zoned(jiff::tz::TimeZone::UTC)
-        .unwrap()
-        .timestamp()
-}
-
-/// A tree minted at noon of `day`; `random` orders trees of the same day.
-fn minted_on(day: Day, random: u8) -> TreeId {
-    let millis = noon(day).as_millisecond().to_be_bytes();
-    let mut id = [random; 12];
-    id[..6].copy_from_slice(&millis[2..]);
-    TreeId::from(id)
-}
-
-/// `offset` milliseconds past noon of `day`, in unix milliseconds.
-fn at(day: Day, offset: u64) -> u64 {
-    noon(day).as_millisecond() as u64 + offset
-}
+use crate::manifests::{ManifestCacheConfig, ManifestReadError};
+use crate::states_file::StatesFileProblem;
+use crate::test_support::{Days, at, days_ago, flush, minted_on, noon, state_row, subflows};
 
 /// `count` rows of `tree` written on `day`, every third a split.
 fn rows(tree: TreeId, day: Day, count: u64) -> Vec<StateRow> {
@@ -48,71 +20,7 @@ fn rows(tree: TreeId, day: Day, count: u64) -> Vec<StateRow> {
         .collect()
 }
 
-/// The rows of one flush, in the order its states file stores them.
-fn flush(parts: Vec<Vec<StateRow>>) -> Vec<StateRow> {
-    let mut rows: Vec<StateRow> = parts.into_iter().flatten().collect();
-    rows.sort_by_key(StateRow::sort_key);
-    rows
-}
-
-/// A store holding days of flushes, as the writer leaves them.
-struct Days {
-    store: Arc<RecordingStore>,
-}
-
 impl Days {
-    fn new() -> Self {
-        Days {
-            store: Arc::new(RecordingStore::default()),
-        }
-    }
-
-    /// Stores `flushes` as the files and manifest of `day`, oldest first.
-    async fn put(&self, day: Day, flushes: &[&[StateRow]]) {
-        let writer = FileWriter::new(ParquetConfig::default()).unwrap();
-        let mut manifest = DayManifest::new(day, "writer-1".parse().unwrap());
-        for (seq, states) in flushes.iter().enumerate() {
-            let nnnn = UnixMillis::from(noon(day).as_millisecond() as u64 + seq as u64);
-            let files = writer
-                .write_batch(&SortedBatch {
-                    states: states.to_vec(),
-                    ..SortedBatch::default()
-                })
-                .unwrap();
-            let name = ObjectName::StatesFile { day, nnnn };
-            manifest.entries.push(FlushEntry {
-                nnnn,
-                seq: seq as u64,
-                states_bounds: bounds(states),
-                states: FileStats {
-                    rows: files.states.rows as u64,
-                    bytes: files.states.bytes.len() as u64,
-                },
-                refs: FileStats {
-                    rows: files.refs.rows as u64,
-                    bytes: files.refs.bytes.len() as u64,
-                },
-            });
-            self.put_object(&name, files.states.bytes).await;
-        }
-        let name = ObjectName::Manifest { day };
-        self.put_object(&name, manifest.encode().unwrap()).await;
-    }
-
-    async fn put_object(&self, name: &ObjectName, bytes: Vec<u8>) {
-        self.store
-            .inner
-            .put(&Path::from(name.to_string()), bytes.into())
-            .await
-            .unwrap();
-    }
-
-    fn lookup(&self, config: TreeLookupConfig) -> TreeLookup {
-        let manifests = ManifestCache::new(self.store.clone(), ManifestCacheConfig::default());
-        let files = StatesFileReader::new(self.store.clone(), StatesFileConfig::default());
-        TreeLookup::new(Arc::new(manifests), files, config)
-    }
-
     /// The rows found with the default config, which must have found no
     /// problems.
     async fn tree(&self, tree: TreeId, until: Option<Timestamp>) -> Vec<StateRow> {
@@ -139,35 +47,6 @@ impl Days {
         )
         .await;
     }
-
-    /// The days whose manifest was requested, in request order.
-    fn manifest_days(&self) -> Vec<Day> {
-        self.store
-            .paths()
-            .iter()
-            .filter(|path| path.ends_with("_manifest"))
-            .map(|path| path[..8].parse().unwrap())
-            .collect()
-    }
-
-    /// The objects requested under `day`, one entry per request.
-    fn requests_on(&self, day: Day) -> Vec<String> {
-        let prefix = format!("{day}/");
-        self.store
-            .paths()
-            .into_iter()
-            .filter(|path| path.starts_with(&prefix))
-            .collect()
-    }
-}
-
-fn bounds(rows: &[StateRow]) -> Option<StatesBounds> {
-    Some(StatesBounds {
-        min_tree: rows.iter().map(|row| row.tree).min()?,
-        max_tree: rows.iter().map(|row| row.tree).max()?,
-        min_ts: rows.iter().map(|row| row.time).min()?,
-        max_ts: rows.iter().map(|row| row.time).max()?,
-    })
 }
 
 fn of(tree: TreeId, flushes: &[&Vec<StateRow>]) -> Vec<StateRow> {

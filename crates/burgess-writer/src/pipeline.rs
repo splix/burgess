@@ -91,7 +91,7 @@ impl<L: PartitionedLog, C: Clock> Pipeline<L, C> {
                 return Err(error);
             }
             tracing::warn!(
-                error = %crate::error_chain(&error),
+                error = %burgess_core::report::error_chain(&error),
                 retry_in = ?wait,
                 "storing a batch failed; trying again"
             );

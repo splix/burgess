@@ -13,3 +13,5 @@ pub mod wire;
 pub mod validation;
 
 pub mod storage;
+
+pub mod report;

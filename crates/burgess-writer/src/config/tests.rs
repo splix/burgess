@@ -205,17 +205,6 @@ fn rejects_invalid_values() {
 }
 
 #[test]
-fn opens_a_local_store_creating_its_directory() {
-    Jail::expect_with(|jail| {
-        let path = jail.directory().join("nested/store");
-        let store = StoreConfig::Local { path: path.clone() };
-        store.open().unwrap();
-        assert!(path.is_dir());
-        Ok(())
-    });
-}
-
-#[test]
 fn rejects_an_invalid_compression_level_at_load() {
     let toml = format!("{MINIMAL}\n[parquet]\nzstd_level = 30\n");
     load_in_jail(&toml, &[], |settings| {

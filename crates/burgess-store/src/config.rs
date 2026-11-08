@@ -1,4 +1,4 @@
-//! Which object store the files go to.
+//! Which object store the files are in.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,9 +10,9 @@ use object_store::path::Path;
 use object_store::prefix::PrefixStore;
 use serde::Deserialize;
 
-use super::text::{optional_text, text};
+use crate::text::{optional_text, text};
 
-/// Where the writer stores files.
+/// Where the files are stored.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum StoreConfig {
@@ -38,7 +38,7 @@ pub enum StoreConfig {
         #[serde(default)]
         allow_http: Option<bool>,
     },
-    /// A local directory, for trying the writer out or single-host setups.
+    /// A local directory, for trying Burgess out or single-host setups.
     Local {
         /// The directory; created if missing.
         path: PathBuf,
@@ -46,8 +46,23 @@ pub enum StoreConfig {
 }
 
 impl StoreConfig {
-    /// Connects to the store.
+    /// Connects to the store, creating a local directory that is missing,
+    /// as a writer's first start finds it.
     pub fn open(&self) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
+        if let StoreConfig::Local { path } = self {
+            std::fs::create_dir_all(path).map_err(|source| object_store::Error::Generic {
+                store: "LocalFileSystem",
+                source: source.into(),
+            })?;
+        }
+        self.open_existing()
+    }
+
+    /// Connects to the store, failing on a local directory that is missing.
+    ///
+    /// For readers: one that created the directory would serve empty results
+    /// from a mistyped path, and the mistake would never show.
+    pub fn open_existing(&self) -> Result<Arc<dyn ObjectStore>, object_store::Error> {
         match self {
             StoreConfig::S3 {
                 bucket,
@@ -72,13 +87,37 @@ impl StoreConfig {
                     None => Arc::new(store),
                 })
             }
-            StoreConfig::Local { path } => {
-                std::fs::create_dir_all(path).map_err(|source| object_store::Error::Generic {
-                    store: "LocalFileSystem",
-                    source: source.into(),
-                })?;
-                Ok(Arc::new(LocalFileSystem::new_with_prefix(path)?))
-            }
+            StoreConfig::Local { path } => Ok(Arc::new(LocalFileSystem::new_with_prefix(path)?)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opens_a_local_store_creating_its_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("nested/store");
+        StoreConfig::Local { path: path.clone() }.open().unwrap();
+        assert!(path.is_dir());
+    }
+
+    #[test]
+    fn opening_an_existing_store_does_not_create_its_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("missing");
+        let store = StoreConfig::Local { path: path.clone() };
+
+        assert!(store.open_existing().is_err());
+        assert!(!path.exists());
+        assert!(
+            StoreConfig::Local {
+                path: root.path().into()
+            }
+            .open_existing()
+            .is_ok()
+        );
     }
 }

@@ -10,5 +10,13 @@ pub mod states_file;
 
 pub mod tree_lookup;
 
+pub mod pages;
+
+pub mod rest;
+
+pub mod config;
+
+pub mod app;
+
 #[cfg(test)]
 mod test_support;

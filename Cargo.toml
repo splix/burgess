@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/burgess-core",
     "crates/burgess-api",
+    "crates/burgess-store",
     "crates/burgess-client",
     "crates/burgess-writer",
     "crates/burgess-reader",
@@ -17,10 +18,12 @@ rust-version = "1.97"
 [workspace.dependencies]
 burgess-core = { path = "crates/burgess-core" }
 burgess-api = { path = "crates/burgess-api" }
+burgess-store = { path = "crates/burgess-store" }
 burgess-client = { path = "crates/burgess-client" }
 burgess-writer = { path = "crates/burgess-writer" }
 
 arrow-array = "60"
+axum = "0.8"
 async-trait = "0.1"
 figment = { version = "0.10", features = ["env", "toml"] }
 futures = "0.3"
@@ -31,19 +34,23 @@ serde_json = "1"
 arrow-schema = "60"
 arrow-select = "60"
 bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
 crossbeam-queue = "0.3"
 parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 prost = "0.14"
 rdkafka = { version = "0.39", features = ["zstd"] }
 rand = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 thiserror = "2"
 tempfile = "3"
 testcontainers-modules = { version = "0.15", features = ["kafka"] }
 tokio = "1"
+tower = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-properties = "0.1"
+wiremock = "0.6"
 
 prost-build = "0.14"
 protox = "0.9"
