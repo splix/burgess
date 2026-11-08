@@ -1,7 +1,5 @@
-//! Turning what a lookup found into the pages the API returns.
-//!
-//! Kept apart from any one transport, so that every transport serving a
-//! lookup returns the same rows, the same limits and the same problems.
+//! What a lookup found, as the messages of a gRPC answer, and the limits of
+//! a page. REST makes its page from the same messages.
 
 mod limits;
 mod page;

@@ -1,15 +1,16 @@
-//! Pages built from found rows: what is kept, how rows read, and what is
-//! reported.
+//! Found rows as the messages of an answer: what is kept, how rows read,
+//! and what is reported.
 
 use std::num::NonZeroUsize;
 
-use burgess_api::{PayloadType, RowKind};
+use burgess_api::grpc::tree_row::Entry;
+use burgess_api::grpc::{GetTreeResponse, PayloadType, TreeItem, TreeResponse, TreeRow};
 use burgess_core::flow::{FlowId, Subflow, TreeId};
-use burgess_core::storage::{StateEntry, StateRow};
+use burgess_core::storage::{Day, StateEntry, StateRow};
 use burgess_core::wire;
-use jiff::Timestamp;
 
 use super::*;
+use crate::manifests::ManifestReadError;
 use crate::test_support::state_row;
 use crate::tree_lookup::FoundTree;
 
@@ -49,71 +50,159 @@ fn with_payload(payload_type: wire::PayloadType, payload: &[u8]) -> StateRow {
     row
 }
 
-#[test]
-fn a_state_reads_as_the_api_row() {
-    let page = found(vec![with_payload(
-        wire::PayloadType::Json,
-        br#"{"amount":42}"#,
-    )])
-    .into_page(limit(10));
+fn items(found: FoundTree, rows: usize) -> Vec<TreeItem> {
+    found
+        .into_responses::<GetTreeResponse>(limit(rows))
+        .into_iter()
+        .map(|response| response.into_item().expect("an item"))
+        .collect()
+}
 
-    let [row] = page.rows.as_slice() else {
-        panic!("one row expected: {page:?}");
-    };
-    assert_eq!(row.flow_id, FlowId::new(tree(), Subflow::from(3)));
-    assert_eq!(row.tree, tree());
-    assert_eq!(row.subflow, Subflow::from(3));
-    assert_eq!(
-        row.ts,
-        Timestamp::from_millisecond(1_793_000_000_123).unwrap()
-    );
-    assert_eq!(row.kind, RowKind::State);
-    assert_eq!(row.payload_type, Some(PayloadType::Json));
-    assert_eq!(row.payload.as_ref().unwrap().get(), r#"{"amount":42}"#);
-    assert_eq!(row.child_subflow, None);
-    assert!(page.problems.is_empty());
+fn rows(items: &[TreeItem]) -> Vec<&TreeRow> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            TreeItem::Row(row) => Some(row),
+            _ => None,
+        })
+        .collect()
+}
+
+fn problems(items: &[TreeItem]) -> Vec<&str> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            TreeItem::Problem(problem) => Some(problem.message.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn subflows(items: &[TreeItem]) -> Vec<u32> {
+    rows(items).iter().map(|row| row.subflow).collect()
 }
 
 #[test]
-fn a_split_reads_as_the_api_row_of_its_parent() {
-    let page = found(vec![state_row(tree(), 2, 5, Some(9))]).into_page(limit(10));
+fn a_state_reads_as_the_grpc_row() {
+    let items = items(
+        found(vec![with_payload(
+            wire::PayloadType::Json,
+            br#"{"amount":42}"#,
+        )]),
+        10,
+    );
 
-    let row = &page.rows[0];
-    assert_eq!(row.kind, RowKind::Split);
-    assert_eq!(row.subflow, Subflow::from(2));
-    assert_eq!(row.child_subflow, Some(Subflow::from(9)));
-    assert!(row.meta.is_empty());
-    assert_eq!((row.payload_type, row.payload.is_none()), (None, true));
+    let [TreeItem::Row(row)] = items.as_slice() else {
+        panic!("one row expected: {items:?}");
+    };
+    assert_eq!(
+        row.flow_id,
+        FlowId::new(tree(), Subflow::from(3)).to_string()
+    );
+    assert_eq!(row.tree, tree().to_string());
+    assert_eq!((row.subflow, row.ts_ms), (3, 1_793_000_000_123));
+    let Some(Entry::State(state)) = &row.entry else {
+        panic!("a state entry expected: {row:?}");
+    };
+    assert_eq!(state.payload_type(), PayloadType::Json);
+    assert_eq!(state.payload.as_deref(), Some(r#"{"amount":42}"#));
+}
+
+#[test]
+fn a_payload_is_sent_without_whitespace_around_it() {
+    let items = items(
+        found(vec![with_payload(
+            wire::PayloadType::Json,
+            b"  {\"a\": 1}\n",
+        )]),
+        10,
+    );
+
+    let Some(Entry::State(state)) = &rows(&items)[0].entry else {
+        panic!("a state entry expected: {items:?}");
+    };
+    assert_eq!(state.payload.as_deref(), Some(r#"{"a": 1}"#));
+}
+
+#[test]
+fn a_split_reads_as_the_grpc_row_of_its_parent() {
+    let items = items(found(vec![state_row(tree(), 2, 5, Some(9))]), 10);
+
+    let row = rows(&items)[0];
+    assert_eq!(row.subflow, 2);
+    let Some(Entry::Split(split)) = &row.entry else {
+        panic!("a split entry expected: {row:?}");
+    };
+    assert_eq!(split.child_subflow, 9);
 }
 
 #[test]
 fn keeps_the_first_rows_up_to_the_limit_and_says_it_cut() {
-    let page = found(states(5)).into_page(limit(3));
+    let items = items(found(states(5)), 3);
 
-    assert_eq!(subflows_of(&page), [0, 1, 2]);
-    assert!(page.truncated);
+    assert_eq!(subflows(&items), [0, 1, 2]);
+    assert_eq!(items.last(), Some(&TreeItem::Truncated));
 }
 
 #[test]
 fn a_page_with_exactly_the_limit_is_not_truncated() {
-    let page = found(states(3)).into_page(limit(3));
+    let items = items(found(states(3)), 3);
 
-    assert_eq!(page.rows.len(), 3);
-    assert!(!page.truncated);
+    assert_eq!(items.len(), 3);
+    assert!(!items.contains(&TreeItem::Truncated));
 }
 
 #[test]
-fn a_payload_that_is_not_json_is_left_out_and_reported() {
-    let page = found(vec![
-        with_payload(wire::PayloadType::Json, b"{not json"),
-        with_payload(wire::PayloadType::Json, b"\xff"),
-    ])
-    .into_page(limit(10));
+fn the_problems_of_the_lookup_come_first() {
+    let mut found = found(states(1));
+    let day: Day = "20261105".parse().unwrap();
+    found.problems.push(
+        ManifestReadError::WrongDay {
+            day,
+            found: day.next().unwrap(),
+        }
+        .into(),
+    );
 
-    assert!(page.rows.iter().all(|row| row.payload.is_none()));
-    assert_eq!(page.rows[0].payload_type, Some(PayloadType::Json));
-    let [not_json, not_text] = page.problems.as_slice() else {
-        panic!("two problems expected: {:?}", page.problems);
+    let items = items(found, 10);
+
+    assert!(
+        matches!(items.as_slice(), [TreeItem::Problem(_), TreeItem::Row(_)]),
+        "{items:?}"
+    );
+}
+
+#[test]
+fn a_payload_that_is_not_json_is_removed_and_reported_before_its_row() {
+    let items = items(
+        found(vec![
+            with_payload(wire::PayloadType::Json, b"{not json"),
+            with_payload(wire::PayloadType::Json, b"\xff"),
+        ]),
+        10,
+    );
+
+    assert!(
+        matches!(
+            items.as_slice(),
+            [
+                TreeItem::Problem(_),
+                TreeItem::Row(_),
+                TreeItem::Problem(_),
+                TreeItem::Row(_)
+            ]
+        ),
+        "{items:?}"
+    );
+    for row in rows(&items) {
+        let Some(Entry::State(state)) = &row.entry else {
+            panic!("a state entry expected: {row:?}");
+        };
+        assert_eq!(state.payload_type(), PayloadType::Json);
+        assert!(state.payload.is_none());
+    }
+    let [not_json, not_text] = problems(&items)[..] else {
+        panic!("two problems expected: {items:?}");
     };
     let flow = FlowId::new(tree(), Subflow::from(3));
     assert!(
@@ -125,13 +214,18 @@ fn a_payload_that_is_not_json_is_left_out_and_reported() {
 }
 
 #[test]
-fn a_payload_without_a_type_is_left_out_and_reported() {
-    let page =
-        found(vec![with_payload(wire::PayloadType::Unspecified, b"{}")]).into_page(limit(10));
+fn a_payload_without_a_type_is_removed_and_reported() {
+    let items = items(
+        found(vec![with_payload(wire::PayloadType::Unspecified, b"{}")]),
+        10,
+    );
 
-    assert_eq!(page.rows[0].payload_type, None);
-    assert!(page.rows[0].payload.is_none());
-    assert!(page.problems[0].ends_with("has no payload type"));
+    let Some(Entry::State(state)) = &rows(&items)[0].entry else {
+        panic!("a state entry expected: {items:?}");
+    };
+    assert_eq!(state.payload_type(), PayloadType::Unspecified);
+    assert!(state.payload.is_none());
+    assert!(problems(&items)[0].ends_with("has no payload type"));
 }
 
 #[test]
@@ -139,9 +233,9 @@ fn rows_past_the_limit_report_no_payload_problems() {
     let mut rows = states(1);
     rows.push(with_payload(wire::PayloadType::Json, b"{not json"));
 
-    let page = found(rows).into_page(limit(1));
+    let items = items(found(rows), 1);
 
-    assert!(page.problems.is_empty(), "{:?}", page.problems);
+    assert!(problems(&items).is_empty(), "{items:?}");
 }
 
 #[test]
@@ -182,8 +276,4 @@ fn a_default_over_the_maximum_is_refused() {
     };
     assert!(limits.check().is_err());
     assert!(PageLimits::default().check().is_ok());
-}
-
-fn subflows_of(page: &burgess_api::Page) -> Vec<u32> {
-    page.rows.iter().map(|row| u32::from(row.subflow)).collect()
 }

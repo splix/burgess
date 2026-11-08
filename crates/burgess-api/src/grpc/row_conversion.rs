@@ -1,16 +1,16 @@
-//! A tree row as JSON and as protobuf.
+//! A tree row from protobuf to the JSON form.
 
 use burgess_core::flow::{FlowId, IdParseError, Subflow, TreeId};
 use jiff::Timestamp;
 use serde_json::value::RawValue;
 
 use super::tree_row::Entry;
-use super::{PayloadType, Split, State, TreeRow};
+use super::{PayloadType, TreeRow};
 use crate::{Row, RowKind};
 
-/// Why a row cannot change to the other form. The service makes only rows
-/// that change correctly. Other versions of the service, or a different
-/// program at its address, can send other rows.
+/// Why a protobuf row cannot change to a [`Row`]. The service sends only
+/// rows that change correctly. Other versions of the service, or a
+/// different program at its address, can send other rows.
 #[derive(Debug, thiserror::Error)]
 pub enum RowConversionError {
     /// The flow id or the tree id is not correct.
@@ -41,55 +41,6 @@ pub enum RowConversionError {
         #[source]
         source: serde_json::Error,
     },
-    /// A split row has no child. Protobuf has no form for it.
-    #[error("the split of {flow_id} has no child subflow")]
-    SplitWithoutChild {
-        /// The flow of the row.
-        flow_id: FlowId,
-    },
-    /// The payload type is newer than this version. Protobuf sends a type as
-    /// its number, and the number is not known.
-    #[error("the payload type of {flow_id} is unknown")]
-    UnknownPayloadType {
-        /// The flow of the row.
-        flow_id: FlowId,
-    },
-}
-
-impl TryFrom<Row> for TreeRow {
-    type Error = RowConversionError;
-
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
-        let flow_id = row.flow_id;
-        let entry = match row.kind {
-            RowKind::State => Some(Entry::State(State {
-                meta: row.meta,
-                payload_type: grpc_payload_type(row.payload_type, flow_id)? as i32,
-                payload: row
-                    .payload
-                    .map(|payload| Box::<str>::from(payload).into_string()),
-            })),
-            RowKind::Split => {
-                let child = row
-                    .child_subflow
-                    .ok_or(RowConversionError::SplitWithoutChild { flow_id })?;
-                Some(Entry::Split(Split {
-                    child_subflow: u32::from(child),
-                }))
-            }
-            // An unset entry is how protobuf sends an unknown kind.
-            RowKind::Unknown => None,
-        };
-        Ok(TreeRow {
-            flow_id: flow_id.to_string(),
-            tree: row.tree.to_string(),
-            subflow: u32::from(row.subflow),
-            ts_ms: row.ts.as_millisecond(),
-            service: row.service,
-            category: row.category,
-            entry,
-        })
-    }
 }
 
 impl TryFrom<TreeRow> for Row {
@@ -139,19 +90,6 @@ impl TryFrom<TreeRow> for Row {
             None => {}
         }
         Ok(converted)
-    }
-}
-
-fn grpc_payload_type(
-    payload_type: Option<crate::PayloadType>,
-    flow_id: FlowId,
-) -> Result<PayloadType, RowConversionError> {
-    match payload_type {
-        Some(crate::PayloadType::Json) => Ok(PayloadType::Json),
-        None => Ok(PayloadType::Unspecified),
-        Some(crate::PayloadType::Unknown) => {
-            Err(RowConversionError::UnknownPayloadType { flow_id })
-        }
     }
 }
 

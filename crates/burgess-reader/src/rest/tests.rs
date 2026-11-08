@@ -6,6 +6,9 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
+use burgess_api::grpc::get_tree_request::Tree;
+use burgess_api::grpc::query_service_server::QueryService;
+use burgess_api::grpc::{GetFlowRequest, GetTreeRequest, TreeResponse};
 use burgess_api::{ErrorBody, Page, RowKind};
 use burgess_core::flow::{FlowId, Subflow, TreeId};
 use burgess_core::storage::{Day, ObjectName, StateRow};
@@ -16,9 +19,10 @@ use serde::de::DeserializeOwned;
 use tower::ServiceExt;
 
 use super::*;
+use crate::grpc::QueryApi;
 use crate::pages::PageLimits;
 use crate::queries::Queries;
-use crate::test_support::{Days, at, days_ago, flush, minted_on, noon, state_row};
+use crate::test_support::{Days, at, days_ago, flush, messages, minted_on, noon, state_row};
 use crate::tree_lookup::TreeLookupConfig;
 
 /// A tree of four flows written on `day`: the root splits off 1 and 4, and
@@ -300,4 +304,109 @@ async fn a_file_that_is_gone_is_reported_without_repeating_its_cause() {
     let parts: Vec<&str> = problem.split(": ").collect();
     let distinct: std::collections::BTreeSet<&str> = parts.iter().copied().collect();
     assert_eq!(distinct.len(), parts.len(), "a part is repeated: {problem}");
+}
+
+/// The JSON page that a gRPC client makes from the answer.
+async fn grpc_page<R: TreeResponse>(
+    answer: Result<tonic::Response<crate::grpc::Answer<R>>, tonic::Status>,
+) -> serde_json::Value {
+    serde_json::to_value(Page::from_responses(messages(answer).await)).unwrap()
+}
+
+/// REST only translates, thus it gives the same page as gRPC. The cases
+/// are the ones that REST translates itself: `until` as RFC 3339, a flow id
+/// on the tree route, and the words of a refusal.
+#[tokio::test]
+async fn rest_and_grpc_answer_with_the_same_page() {
+    let (first, later) = (days_ago(5), days_ago(3));
+    let tree = minted_on(first, 5);
+    let days = Days::new();
+    days.put(first, &[&family(tree, first)]).await;
+    days.put(
+        later,
+        &[&flush(vec![vec![state_row(tree, 0, at(later, 0), None)]])],
+    )
+    .await;
+    days.put_object(
+        &ObjectName::Manifest { day: days_ago(4) },
+        b"not a manifest".to_vec(),
+    )
+    .await;
+    let queries = Arc::new(Queries {
+        lookup: days.lookup(TreeLookupConfig::default()),
+        limits: PageLimits::default(),
+    });
+    let grpc = QueryApi::new(queries.clone());
+    let flow = FlowId::new(tree, Subflow::from(1));
+    let until = noon(first);
+
+    let rest_tree: serde_json::Value = get_json(
+        router(queries.clone()),
+        &format!("/v1/trees/{flow}?limit=4&until={until}"),
+        StatusCode::OK,
+    )
+    .await;
+    let grpc_tree = grpc_page(
+        grpc.get_tree(tonic::Request::new(GetTreeRequest {
+            tree: Some(Tree::FlowId(flow.to_string())),
+            limit: Some(4),
+            until_ms: Some(until.as_millisecond()),
+            ..Default::default()
+        }))
+        .await,
+    )
+    .await;
+    let rest_flow: serde_json::Value = get_json(
+        router(queries.clone()),
+        &format!("/v1/flows/{flow}"),
+        StatusCode::OK,
+    )
+    .await;
+    let grpc_flow = grpc_page(
+        grpc.get_flow(tonic::Request::new(GetFlowRequest {
+            flow_id: flow.to_string(),
+            ..Default::default()
+        }))
+        .await,
+    )
+    .await;
+
+    assert_eq!(rest_tree, grpc_tree);
+    assert_eq!(rest_tree["truncated"], true, "{rest_tree}");
+    assert_eq!(rest_tree["problems"].as_array().map(Vec::len), Some(1));
+    assert_eq!(rest_flow, grpc_flow);
+    assert_eq!(rest_flow["rows"].as_array().map(Vec::len), Some(2));
+
+    let rest_refusal = refused(router(queries), &format!("/v1/flows/{flow}?limit=0")).await;
+    let grpc_refusal = grpc
+        .get_flow(tonic::Request::new(GetFlowRequest {
+            flow_id: flow.to_string(),
+            limit: Some(0),
+            ..Default::default()
+        }))
+        .await
+        .expect_err("a refusal");
+    assert_eq!(rest_refusal, grpc_refusal.message());
+}
+
+#[tokio::test]
+async fn a_limit_too_large_for_grpc_is_over_the_maximum() {
+    let (days, tree) = one_tree().await;
+
+    let error = refused(
+        router_over(&days),
+        &format!("/v1/trees/{tree}?limit=4294967296"),
+    )
+    .await;
+
+    assert_eq!(error, "limit 4294967296 is over the maximum of 10000");
+}
+
+#[tokio::test]
+async fn both_routes_check_the_id_before_the_options() {
+    let days = Days::new();
+    for route in ["trees", "flows"] {
+        let error = refused(router_over(&days), &format!("/v1/{route}/zz?limit=many")).await;
+        assert!(error.starts_with("invalid id"), "{route}: {error}");
+    }
 }

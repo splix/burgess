@@ -1,13 +1,13 @@
-//! Requests that the gRPC service cannot serve.
+//! Requests that the service cannot serve.
 
 use burgess_core::flow::IdParseError;
-use burgess_core::report::error_chain;
-use tonic::Status;
+use burgess_core::storage::DayError;
+use jiff::Timestamp;
 
-use crate::queries::PageRequestError;
+use crate::pages::LimitError;
 
-/// Why the service cannot serve a gRPC request. The service refuses each
-/// with `INVALID_ARGUMENT` and a message that tells what to change.
+/// Why the service cannot serve a request. Each error is a fault of the
+/// request, and its message tells what to change.
 #[derive(Debug, thiserror::Error)]
 pub enum RequestError {
     /// The id is not one that the method accepts.
@@ -18,13 +18,23 @@ pub enum RequestError {
     NoTree,
     /// `until_ms` is out of the range of times.
     #[error("until_ms {until_ms} is out of the range of times")]
-    Until {
+    UntilMs {
         /// The value given.
         until_ms: i64,
     },
-    /// `until_ms` or `limit` is a value that the service does not serve.
+    /// `until` is on no day that has stored files. Refused, because the
+    /// lookup would find nothing and give no cause.
+    #[error("until {until} is out of the range of days")]
+    UntilDay {
+        /// The time given.
+        until: Timestamp,
+        /// Why it is on no day.
+        #[source]
+        source: DayError,
+    },
+    /// The limit is a number that the service does not serve.
     #[error(transparent)]
-    Page(#[from] PageRequestError),
+    Limit(#[from] LimitError),
     /// The service does not sort rows yet. It refuses the order and does
     /// not ignore it, thus the caller does not think the rows are sorted.
     #[error("order is not served yet; do not set it to get the rows in the order they are read")]
@@ -32,10 +42,4 @@ pub enum RequestError {
     /// No answer gives a cursor yet.
     #[error("cursors are not served yet")]
     Cursor,
-}
-
-impl From<RequestError> for Status {
-    fn from(error: RequestError) -> Self {
-        Status::invalid_argument(error_chain(&error))
-    }
 }

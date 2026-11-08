@@ -1,28 +1,23 @@
 //! The methods of the gRPC service.
 
-use std::str::FromStr;
 use std::sync::Arc;
 
-use burgess_api::Page;
-use burgess_api::grpc::get_tree_request::Tree;
 use burgess_api::grpc::query_service_server::QueryService;
 use burgess_api::grpc::{
     GetFlowRequest, GetFlowResponse, GetTreeRequest, GetTreeResponse, ListRefsRequest,
-    ListRefsResponse, ListStatesRequest, ListStatesResponse, TreeResponse,
+    ListRefsResponse, ListStatesRequest, ListStatesResponse,
 };
-use burgess_core::flow::{FlowId, IdParseError, TreeId};
+use burgess_core::report::error_chain;
 use futures::stream;
 use tonic::{Request, Response, Status};
 
-use super::error::RequestError;
-use super::options::PageOptions;
-use crate::queries::Queries;
+use crate::queries::{Queries, RequestError};
 
 /// The messages of one answer. The lookup reads all rows before it cuts the
 /// page, thus the full answer is known before the first message.
 pub type Answer<T> = stream::Iter<std::vec::IntoIter<Result<T, Status>>>;
 
-/// The gRPC service. It answers from the same queries as REST.
+/// The gRPC service. It sends the answers of the queries as they are.
 pub struct QueryApi {
     queries: Arc<Queries>,
 }
@@ -45,24 +40,14 @@ impl QueryService for QueryApi {
         &self,
         request: Request<GetTreeRequest>,
     ) -> Result<Response<Self::GetTreeStream>, Status> {
-        let request = request.into_inner();
-        let tree = match &request.tree {
-            Some(Tree::TreeId(tree)) => parse::<TreeId>(tree)?,
-            Some(Tree::FlowId(flow)) => parse::<FlowId>(flow)?.tree(),
-            None => return Err(RequestError::NoTree.into()),
-        };
-        let page = PageOptions::from(&request).check(&self.queries.limits)?;
-        Ok(answer(self.queries.tree(tree, page).await))
+        answer(self.queries.get_tree(request.into_inner()).await)
     }
 
     async fn get_flow(
         &self,
         request: Request<GetFlowRequest>,
     ) -> Result<Response<Self::GetFlowStream>, Status> {
-        let request = request.into_inner();
-        let flow = parse::<FlowId>(&request.flow_id)?;
-        let page = PageOptions::from(&request).check(&self.queries.limits)?;
-        Ok(answer(self.queries.flow(flow, page).await))
+        answer(self.queries.get_flow(request.into_inner()).await)
     }
 
     async fn list_states(
@@ -80,11 +65,9 @@ impl QueryService for QueryApi {
     }
 }
 
-fn parse<T: FromStr<Err = IdParseError>>(id: &str) -> Result<T, RequestError> {
-    Ok(id.parse()?)
-}
-
-fn answer<R: TreeResponse>(page: Page) -> Response<Answer<R>> {
-    let responses: Vec<_> = page.into_responses().map(Ok).collect();
-    Response::new(stream::iter(responses))
+/// Each request error is a fault of the request.
+fn answer<R>(responses: Result<Vec<R>, RequestError>) -> Result<Response<Answer<R>>, Status> {
+    let responses = responses.map_err(|error| Status::invalid_argument(error_chain(&error)))?;
+    let messages: Vec<_> = responses.into_iter().map(Ok).collect();
+    Ok(Response::new(stream::iter(messages)))
 }

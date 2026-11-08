@@ -1,82 +1,85 @@
-//! A page of tree rows as the messages of a gRPC answer.
+//! The messages of an answer of tree rows, and the page they make.
 
 use burgess_core::report::error_chain;
 
 use super::{GetFlowResponse, GetTreeResponse, Problem, TreeRow, Truncated};
 use super::{get_flow_response, get_tree_response};
-use crate::Page;
+use crate::{Page, Row};
+
+/// What one message of an answer of tree rows holds.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TreeItem {
+    /// A row of the tree.
+    Row(TreeRow),
+    /// Data that the lookup could not read.
+    Problem(Problem),
+    /// The last message, when more rows exist than the limit.
+    Truncated,
+}
 
 /// A message of an answer of tree rows. GetTree and GetFlow have different
 /// response types with the same content. This trait lets one function make
-/// the messages of both.
+/// and read the messages of the two.
 pub trait TreeResponse {
-    /// A message with a row.
-    fn row(row: TreeRow) -> Self;
-    /// A message with a problem.
-    fn problem(problem: Problem) -> Self;
-    /// The last message, when the page was cut at its limit.
-    fn truncated() -> Self;
+    /// The message that holds `item`.
+    fn from_item(item: TreeItem) -> Self;
+    /// The item of the message. `None` for a message kind that is newer
+    /// than this version.
+    fn into_item(self) -> Option<TreeItem>;
 }
 
 impl Page {
-    /// The messages of this page: problems first, because they are known
-    /// before the rows, then one message for each row, then `truncated` if
-    /// the page was cut.
+    /// The page that the messages of an answer make, as REST sends it.
     ///
-    /// A row that protobuf cannot hold changes to a problem. The other rows
-    /// are still sent.
-    pub fn into_responses<R: TreeResponse>(self) -> impl Iterator<Item = R> {
-        let problems = self.problems.into_iter();
-        let rows = self.rows.into_iter().map(TreeRow::try_from);
-        let truncated = self.truncated.then(R::truncated);
-        problems
-            .map(|message| R::problem(Problem { message }))
-            .chain(rows.map(|row| match row {
-                Ok(row) => R::row(row),
-                Err(error) => R::problem(Problem {
-                    message: error_chain(&error),
-                }),
-            }))
-            .chain(truncated)
+    /// A row that the page cannot hold, or a message of an unknown kind,
+    /// becomes a problem. The other rows are kept.
+    pub fn from_responses<R: TreeResponse>(responses: impl IntoIterator<Item = R>) -> Self {
+        let mut page = Page {
+            rows: Vec::new(),
+            truncated: false,
+            problems: Vec::new(),
+        };
+        for response in responses {
+            match response.into_item() {
+                Some(TreeItem::Row(row)) => match Row::try_from(row) {
+                    Ok(row) => page.rows.push(row),
+                    Err(error) => page.problems.push(error_chain(&error)),
+                },
+                Some(TreeItem::Problem(problem)) => page.problems.push(problem.message),
+                Some(TreeItem::Truncated) => page.truncated = true,
+                None => page
+                    .problems
+                    .push("a message of an unknown kind was skipped".to_string()),
+            }
+        }
+        page
     }
 }
 
-impl TreeResponse for GetTreeResponse {
-    fn row(row: TreeRow) -> Self {
-        GetTreeResponse {
-            item: Some(get_tree_response::Item::Row(row)),
-        }
-    }
+/// GetTree and GetFlow responses hold the same items, under different
+/// generated types.
+macro_rules! tree_response {
+    ($response:ty, $item:ident) => {
+        impl TreeResponse for $response {
+            fn from_item(item: TreeItem) -> Self {
+                let item = match item {
+                    TreeItem::Row(row) => $item::Item::Row(row),
+                    TreeItem::Problem(problem) => $item::Item::Problem(problem),
+                    TreeItem::Truncated => $item::Item::Truncated(Truncated {}),
+                };
+                Self { item: Some(item) }
+            }
 
-    fn problem(problem: Problem) -> Self {
-        GetTreeResponse {
-            item: Some(get_tree_response::Item::Problem(problem)),
+            fn into_item(self) -> Option<TreeItem> {
+                Some(match self.item? {
+                    $item::Item::Row(row) => TreeItem::Row(row),
+                    $item::Item::Problem(problem) => TreeItem::Problem(problem),
+                    $item::Item::Truncated(_) => TreeItem::Truncated,
+                })
+            }
         }
-    }
-
-    fn truncated() -> Self {
-        GetTreeResponse {
-            item: Some(get_tree_response::Item::Truncated(Truncated {})),
-        }
-    }
+    };
 }
 
-impl TreeResponse for GetFlowResponse {
-    fn row(row: TreeRow) -> Self {
-        GetFlowResponse {
-            item: Some(get_flow_response::Item::Row(row)),
-        }
-    }
-
-    fn problem(problem: Problem) -> Self {
-        GetFlowResponse {
-            item: Some(get_flow_response::Item::Problem(problem)),
-        }
-    }
-
-    fn truncated() -> Self {
-        GetFlowResponse {
-            item: Some(get_flow_response::Item::Truncated(Truncated {})),
-        }
-    }
-}
+tree_response!(GetTreeResponse, get_tree_response);
+tree_response!(GetFlowResponse, get_flow_response);

@@ -47,3 +47,17 @@ pub(crate) fn state_row(tree: TreeId, subflow: u32, time: u64, child: Option<u32
 pub(crate) fn subflows(rows: &[StateRow]) -> Vec<u32> {
     rows.iter().map(|row| u32::from(row.subflow)).collect()
 }
+
+/// The messages of a gRPC answer, for a test that expects one.
+pub(crate) async fn messages<R>(
+    answer: Result<tonic::Response<crate::grpc::Answer<R>>, tonic::Status>,
+) -> Vec<R> {
+    use futures::StreamExt;
+
+    answer
+        .expect("an answer")
+        .into_inner()
+        .map(|message| message.expect("a message"))
+        .collect()
+        .await
+}

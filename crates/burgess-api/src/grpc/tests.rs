@@ -1,14 +1,11 @@
-//! Rows and pages as gRPC messages: all fields arrive, and the conversion
-//! refuses what it cannot hold.
+//! gRPC messages read as the REST page: all fields arrive, and what a
+//! client cannot read becomes a problem.
 
 use std::collections::BTreeMap;
 
 use burgess_core::flow::{FlowId, Subflow, TreeId};
-use jiff::Timestamp;
-use serde_json::value::RawValue;
+use serde_json::json;
 
-use super::get_flow_response;
-use super::get_tree_response::Item;
 use super::tree_row::Entry;
 use super::*;
 use crate::{Page, Row, RowKind};
@@ -19,147 +16,122 @@ fn tree() -> TreeId {
     TREE.parse().unwrap()
 }
 
-fn state() -> Row {
-    Row {
-        flow_id: FlowId::new(tree(), Subflow::from(7)),
-        tree: tree(),
-        subflow: Subflow::from(7),
-        ts: Timestamp::from_millisecond(1_793_000_000_123).unwrap(),
-        kind: RowKind::State,
+fn state() -> TreeRow {
+    TreeRow {
+        flow_id: FlowId::new(tree(), Subflow::from(7)).to_string(),
+        tree: TREE.into(),
+        subflow: 7,
+        ts_ms: 1_793_000_000_123,
         service: "checkout".into(),
         category: "order".into(),
-        meta: BTreeMap::from([("region".to_string(), "eu".to_string())]),
-        payload_type: Some(crate::PayloadType::Json),
-        payload: Some(RawValue::from_string(r#"{"amount":42}"#.into()).unwrap()),
-        child_subflow: None,
+        entry: Some(Entry::State(State {
+            meta: BTreeMap::from([("region".to_string(), "eu".to_string())]),
+            payload_type: PayloadType::Json as i32,
+            payload: Some(r#"{"amount":42}"#.into()),
+        })),
     }
 }
 
-fn split() -> Row {
-    Row {
-        flow_id: FlowId::new(tree(), Subflow::ROOT),
-        subflow: Subflow::ROOT,
-        kind: RowKind::Split,
-        meta: BTreeMap::new(),
-        payload_type: None,
-        payload: None,
-        child_subflow: Some(Subflow::from(7)),
+fn split() -> TreeRow {
+    TreeRow {
+        flow_id: FlowId::new(tree(), Subflow::ROOT).to_string(),
+        subflow: 0,
+        entry: Some(Entry::Split(Split { child_subflow: 7 })),
         ..state()
     }
 }
 
-/// The row as REST sends it. The two transports must agree on it.
+fn row(message: TreeRow) -> Row {
+    Row::try_from(message).unwrap()
+}
+
+/// The row as REST sends it.
 fn json(row: &Row) -> serde_json::Value {
     serde_json::to_value(row).unwrap()
 }
 
-fn message(row: Row) -> TreeRow {
-    TreeRow::try_from(row).unwrap()
-}
-
-fn round_trip(row: Row) -> Row {
-    Row::try_from(message(row)).unwrap()
-}
-
 #[test]
-fn a_state_carries_every_field() {
-    let message = message(state());
-
-    assert_eq!(message.flow_id, format!("{TREE}00000007"));
-    assert_eq!(message.tree, TREE);
-    assert_eq!((message.subflow, message.ts_ms), (7, 1_793_000_000_123));
+fn a_state_reads_as_rest_sends_it() {
     assert_eq!(
-        (message.service.as_str(), message.category.as_str()),
-        ("checkout", "order")
-    );
-    let Some(Entry::State(state)) = message.entry else {
-        panic!("a state entry expected: {:?}", message.entry);
-    };
-    assert_eq!(state.meta.get("region").map(String::as_str), Some("eu"));
-    assert_eq!(state.payload_type(), PayloadType::Json);
-    assert_eq!(state.payload.as_deref(), Some(r#"{"amount":42}"#));
-}
-
-#[test]
-fn a_split_carries_its_child() {
-    let message = message(split());
-
-    assert_eq!(
-        message.entry,
-        Some(Entry::Split(Split { child_subflow: 7 }))
+        json(&row(state())),
+        json!({
+            "flow_id": format!("{TREE}00000007"),
+            "tree": TREE,
+            "subflow": 7,
+            "ts": 1_793_000_000_123_u64,
+            "kind": "state",
+            "service": "checkout",
+            "category": "order",
+            "meta": {"region": "eu"},
+            "payload_type": "json",
+            "payload": {"amount": 42},
+            "child_subflow": null,
+        })
     );
 }
 
 #[test]
-fn rows_read_back_as_rest_sends_them() {
-    for row in [state(), split()] {
-        assert_eq!(json(&round_trip(row.clone())), json(&row));
+fn a_split_reads_as_rest_sends_it() {
+    let row = row(split());
+
+    assert_eq!(row.kind, RowKind::Split);
+    assert_eq!(row.child_subflow, Some(Subflow::from(7)));
+    assert!(row.meta.is_empty());
+    assert_eq!((row.payload_type, row.payload.is_none()), (None, true));
+}
+
+#[test]
+fn a_state_without_its_payload_reads_without_one() {
+    let mut message = state();
+    if let Some(Entry::State(state)) = &mut message.entry {
+        state.payload = None;
     }
+
+    let row = row(message);
+
+    assert_eq!(row.payload_type, Some(crate::PayloadType::Json));
+    assert!(row.payload.is_none());
 }
 
 #[test]
-fn a_state_without_its_payload_reads_back_without_one() {
-    let back = round_trip(Row {
-        payload: None,
+fn a_row_of_a_kind_newer_than_the_client_reads_as_unknown() {
+    let row = row(TreeRow {
+        entry: None,
         ..state()
     });
 
-    assert_eq!(back.payload_type, Some(crate::PayloadType::Json));
-    assert!(back.payload.is_none());
+    assert_eq!(row.kind, RowKind::Unknown);
+    assert_eq!(row.service, "checkout");
 }
 
 #[test]
-fn a_row_of_an_unknown_kind_reads_back_as_unknown() {
-    let row = Row {
-        kind: RowKind::Unknown,
-        ..state()
-    };
+fn a_state_without_a_payload_type_reads_as_rest_sends_it() {
+    let mut message = state();
+    if let Some(Entry::State(state)) = &mut message.entry {
+        state.payload_type = PayloadType::Unspecified as i32;
+        state.payload = None;
+    }
 
-    let back = round_trip(row);
+    let row = row(message);
 
-    assert_eq!(back.kind, RowKind::Unknown);
-    assert_eq!(back.service, "checkout");
+    assert_eq!(json(&row)["payload_type"], serde_json::Value::Null);
 }
 
 #[test]
 fn a_payload_type_newer_than_the_client_reads_as_unknown() {
-    let mut message = message(state());
-    let Some(Entry::State(state)) = &mut message.entry else {
-        unreachable!("a state entry");
-    };
-    state.payload_type = 99;
+    let mut message = state();
+    if let Some(Entry::State(state)) = &mut message.entry {
+        state.payload_type = 99;
+    }
 
-    let row = Row::try_from(message).unwrap();
-
-    assert_eq!(row.payload_type, Some(crate::PayloadType::Unknown));
+    assert_eq!(row(message).payload_type, Some(crate::PayloadType::Unknown));
 }
 
 #[test]
-fn rows_that_protobuf_cannot_hold_are_refused() {
-    let no_child = Row {
-        child_subflow: None,
-        ..split()
-    };
-    assert!(matches!(
-        TreeRow::try_from(no_child),
-        Err(RowConversionError::SplitWithoutChild { .. })
-    ));
-
-    let unknown_type = Row {
-        payload_type: Some(crate::PayloadType::Unknown),
-        ..state()
-    };
-    assert!(matches!(
-        TreeRow::try_from(unknown_type),
-        Err(RowConversionError::UnknownPayloadType { .. })
-    ));
-}
-
-#[test]
-fn a_message_that_a_client_cannot_read_is_refused_with_the_cause() {
+fn a_row_that_a_client_cannot_read_is_refused_with_the_cause() {
     let bad_id = TreeRow {
         flow_id: "zz".into(),
-        ..message(state())
+        ..state()
     };
     assert!(matches!(
         Row::try_from(bad_id),
@@ -168,7 +140,7 @@ fn a_message_that_a_client_cannot_read_is_refused_with_the_cause() {
 
     let other_tree = TreeRow {
         tree: "0c0b0a090807060504030201".into(),
-        ..message(state())
+        ..state()
     };
     assert!(matches!(
         Row::try_from(other_tree),
@@ -177,7 +149,7 @@ fn a_message_that_a_client_cannot_read_is_refused_with_the_cause() {
 
     let other_subflow = TreeRow {
         subflow: 0,
-        ..message(state())
+        ..state()
     };
     assert!(matches!(
         Row::try_from(other_subflow),
@@ -186,14 +158,14 @@ fn a_message_that_a_client_cannot_read_is_refused_with_the_cause() {
 
     let bad_time = TreeRow {
         ts_ms: i64::MAX,
-        ..message(state())
+        ..state()
     };
     assert!(matches!(
         Row::try_from(bad_time),
         Err(RowConversionError::Time { ts_ms: i64::MAX })
     ));
 
-    let mut bad_payload = message(state());
+    let mut bad_payload = state();
     if let Some(Entry::State(state)) = &mut bad_payload.entry {
         state.payload = Some("{not json".into());
     }
@@ -203,93 +175,69 @@ fn a_message_that_a_client_cannot_read_is_refused_with_the_cause() {
     ));
 }
 
-fn items(page: Page) -> Vec<Item> {
-    page.into_responses::<GetTreeResponse>()
-        .map(|response| response.item.unwrap())
-        .collect()
+fn responses(items: Vec<TreeItem>) -> Vec<GetTreeResponse> {
+    items.into_iter().map(GetTreeResponse::from_item).collect()
 }
 
 #[test]
-fn a_page_is_sent_as_its_problems_then_its_rows_then_whether_it_was_cut() {
-    let page = Page {
-        rows: vec![state(), split()],
-        truncated: true,
-        problems: vec!["a file is gone".into()],
-    };
+fn messages_make_the_page_in_their_order() {
+    let page = Page::from_responses(responses(vec![
+        TreeItem::Problem(Problem {
+            message: "a file is gone".into(),
+        }),
+        TreeItem::Row(state()),
+        TreeItem::Row(split()),
+        TreeItem::Truncated,
+    ]));
 
-    let items = items(page);
-
-    let [
-        Item::Problem(problem),
-        Item::Row(first),
-        Item::Row(second),
-        Item::Truncated(_),
-    ] = items.as_slice()
-    else {
-        panic!("problem, two rows, truncated expected: {items:?}");
-    };
-    assert_eq!(problem.message, "a file is gone");
-    assert_eq!((first.subflow, second.subflow), (7, 0));
+    assert_eq!(page.problems, ["a file is gone"]);
+    let subflows: Vec<u32> = page.rows.iter().map(|row| row.subflow.into()).collect();
+    assert_eq!(subflows, [7, 0]);
+    assert!(page.truncated);
 }
 
 #[test]
-fn a_complete_page_ends_with_its_last_row() {
-    let page = Page {
-        rows: vec![state()],
-        truncated: false,
-        problems: Vec::new(),
-    };
+fn a_page_without_truncated_is_complete() {
+    let page = Page::from_responses(responses(vec![TreeItem::Row(state())]));
 
-    assert!(matches!(items(page).as_slice(), [Item::Row(_)]));
+    assert_eq!(page.rows.len(), 1);
+    assert!(!page.truncated);
+    assert!(page.problems.is_empty());
 }
 
 #[test]
-fn a_row_that_protobuf_cannot_hold_is_sent_as_a_problem() {
-    let page = Page {
-        rows: vec![
-            Row {
-                child_subflow: None,
-                ..split()
-            },
-            state(),
-        ],
-        truncated: false,
-        problems: Vec::new(),
+fn what_the_page_cannot_hold_becomes_a_problem_and_the_rest_is_kept() {
+    let bad_time = TreeRow {
+        ts_ms: i64::MAX,
+        ..state()
     };
+    let unknown = GetTreeResponse { item: None };
 
-    let items = items(page);
+    let mut messages = responses(vec![TreeItem::Row(bad_time), TreeItem::Row(split())]);
+    messages.push(unknown);
+    let page = Page::from_responses(messages);
 
-    let [Item::Problem(problem), Item::Row(_)] = items.as_slice() else {
-        panic!("a problem, then the other row expected: {items:?}");
+    assert_eq!(page.rows.len(), 1);
+    let [time, kind] = page.problems.as_slice() else {
+        panic!("two problems expected: {:?}", page.problems);
     };
-    assert!(
-        problem.message.contains("has no child subflow"),
-        "{problem:?}"
-    );
+    assert!(time.contains("is out of range"), "{time}");
+    assert_eq!(kind, "a message of an unknown kind was skipped");
 }
 
 #[test]
-fn a_flow_answer_has_the_same_messages_as_a_tree_answer() {
-    let page = Page {
-        rows: vec![state()],
-        truncated: true,
-        problems: vec!["a file is gone".into()],
-    };
+fn tree_and_flow_messages_hold_the_same_items() {
+    let items = vec![
+        TreeItem::Row(state()),
+        TreeItem::Problem(Problem {
+            message: "a file is gone".into(),
+        }),
+        TreeItem::Truncated,
+    ];
 
-    let items: Vec<_> = page
-        .into_responses::<GetFlowResponse>()
-        .map(|response| response.item.unwrap())
-        .collect();
-
-    assert!(
-        matches!(
-            items.as_slice(),
-            [
-                get_flow_response::Item::Problem(_),
-                get_flow_response::Item::Row(_),
-                get_flow_response::Item::Truncated(_),
-            ]
-        ),
-        "{items:?}"
-    );
+    for item in items {
+        let tree = GetTreeResponse::from_item(item.clone()).into_item();
+        let flow = GetFlowResponse::from_item(item.clone()).into_item();
+        assert_eq!((tree.as_ref(), flow.as_ref()), (Some(&item), Some(&item)));
+    }
 }

@@ -12,12 +12,11 @@ use burgess_api::grpc::{
 use burgess_api::{Row, RowKind};
 use burgess_core::flow::{FlowId, Subflow, TreeId};
 use burgess_core::storage::{Day, ObjectName, StateRow};
-use futures::StreamExt;
 use tonic::{Code, Request, Status};
 
 use super::*;
 use crate::pages::PageLimits;
-use crate::test_support::{Days, at, days_ago, flush, minted_on, noon, state_row};
+use crate::test_support::{Days, at, days_ago, flush, messages, minted_on, noon, state_row};
 use crate::tree_lookup::TreeLookupConfig;
 
 /// A tree of four flows written on `day`: the root splits off 1 and 4, and
@@ -63,19 +62,9 @@ fn flow_request(tree: TreeId, subflow: u32) -> GetFlowRequest {
     }
 }
 
-/// The items of the messages of an answer.
-async fn items<R>(answer: Result<tonic::Response<Answer<R>>, Status>) -> Vec<R> {
-    answer
-        .expect("an answer")
-        .into_inner()
-        .map(|message| message.expect("a message"))
-        .collect()
-        .await
-}
-
 async fn tree(days: &Days, request: GetTreeRequest) -> Vec<Item> {
     let answer = api(days).get_tree(Request::new(request)).await;
-    items(answer)
+    messages(answer)
         .await
         .into_iter()
         .map(|message| message.item.expect("an item"))
@@ -90,7 +79,7 @@ async fn tree_items(days: &Days, tree: TreeId) -> Vec<Item> {
 /// the same helpers check the two.
 async fn flow(days: &Days, request: GetFlowRequest) -> Vec<Item> {
     let answer = api(days).get_flow(Request::new(request)).await;
-    items(answer)
+    messages(answer)
         .await
         .into_iter()
         .map(|message| match message.item.expect("an item") {

@@ -2,6 +2,7 @@
 //!
 //! An answer is a stream: the problems of the lookup, then one row in each
 //! message, then a message that tells if the limit cut the answer. A
+//! problem about a payload comes just before the row of that payload. A
 //! request that the service cannot serve gets `INVALID_ARGUMENT`. A method
 //! that is not served yet gets `UNIMPLEMENTED`.
 //!
@@ -9,11 +10,8 @@
 //! route, found by its path. Thus one address serves the two transports,
 //! and a stop lets the answers of the two complete.
 
-mod error;
-mod options;
 mod service;
 
-pub use error::RequestError;
 pub use service::{Answer, QueryApi};
 
 use std::sync::Arc;

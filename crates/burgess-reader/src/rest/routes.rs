@@ -7,6 +7,7 @@ use axum::extract::{Path, Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use burgess_api::Page;
+use burgess_api::grpc::get_tree_request::Tree;
 use burgess_core::flow::{FlowId, FlowOrTree};
 
 use super::error::RequestError;
@@ -31,25 +32,28 @@ async fn method_not_allowed() -> RequestError {
     RequestError::MethodNotAllowed
 }
 
-/// Every row of a tree. A flow id names its tree, so an id copied from any
-/// row of the tree works.
+/// All rows of a tree. A flow id identifies its tree, thus an id from any
+/// row of the tree is correct.
 async fn tree(
     State(queries): State<Arc<Queries>>,
     id: Result<Path<String>, PathRejection>,
     params: Result<Query<PageParams>, QueryRejection>,
 ) -> Result<Json<Page>, RequestError> {
-    let tree = id?.0.parse::<FlowOrTree>()?.tree();
-    let request = params?.0.request(&queries.limits)?;
-    Ok(Json(queries.tree(tree, request).await))
+    let tree = match id?.0.parse::<FlowOrTree>()? {
+        FlowOrTree::Tree(tree) => Tree::TreeId(tree.to_string()),
+        FlowOrTree::Flow(flow) => Tree::FlowId(flow.to_string()),
+    };
+    let request = params?.0.tree_request(tree, &queries.limits)?;
+    Ok(Json(Page::from_responses(queries.get_tree(request).await?)))
 }
 
-/// Every row of a flow and of the flows split off below it.
+/// All rows of a flow and of the flows split off below it.
 async fn flow(
     State(queries): State<Arc<Queries>>,
     id: Result<Path<String>, PathRejection>,
     params: Result<Query<PageParams>, QueryRejection>,
 ) -> Result<Json<Page>, RequestError> {
     let flow = id?.0.parse::<FlowId>()?;
-    let request = params?.0.request(&queries.limits)?;
-    Ok(Json(queries.flow(flow, request).await))
+    let request = params?.0.flow_request(flow, &queries.limits)?;
+    Ok(Json(Page::from_responses(queries.get_flow(request).await?)))
 }

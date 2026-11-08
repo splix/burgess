@@ -8,14 +8,14 @@ use burgess_api::{ErrorBody, TimeParseError};
 use burgess_core::flow::IdParseError;
 use burgess_core::report::error_chain;
 
-use crate::queries::PageRequestError;
+use crate::queries;
 
 /// Why a request cannot be served. Each answers with an
 /// [`ErrorBody`] saying what to change, so a client reads every error the
 /// same way.
 #[derive(Debug, thiserror::Error)]
 pub enum RequestError {
-    /// The id in the path is not one the route takes.
+    /// The id in the path is not a tree id or a flow id.
     #[error("invalid id")]
     Id(#[from] IdParseError),
     /// `until` is not a time.
@@ -27,9 +27,9 @@ pub enum RequestError {
         /// The value given.
         found: String,
     },
-    /// `until` or `limit` is a value that the service does not serve.
+    /// The lookup refused the request, as it refuses it over gRPC.
     #[error(transparent)]
-    Page(#[from] PageRequestError),
+    Lookup(#[from] queries::RequestError),
     /// The path or the query string cannot be read. That includes a query
     /// naming an option the route does not take, since a misspelled option
     /// would otherwise be silently ignored.

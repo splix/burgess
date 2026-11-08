@@ -1,11 +1,11 @@
-//! The query API over HTTP, in JSON.
+//! The query API over HTTP, in JSON, for curl and simple clients.
 //!
-//! A route takes its id from the path and its options from the query
-//! string, and answers with a page of rows, or with 400 and an
-//! [`ErrorBody`](burgess_api::ErrorBody) when the request cannot be served.
-//! A lookup that could not read everything still answers 200: the rows it
-//! found are what an investigation needs, and the page lists what may be
-//! missing.
+//! A route only translates. It reads the path and the query string into the
+//! gRPC request message, and makes its JSON page from the gRPC response
+//! messages. The lookup is the same as for gRPC. A request that cannot be
+//! served gets 400 and an [`ErrorBody`](burgess_api::ErrorBody). A lookup
+//! that could not read everything still gets 200: the page has the rows that
+//! were found, and the problems tell which rows can be missing.
 
 mod error;
 mod params;

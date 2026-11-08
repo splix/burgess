@@ -1,11 +1,13 @@
 //! The options of a lookup request, checked the same way for each method.
 
+use std::num::NonZeroUsize;
+
 use burgess_api::grpc::{GetFlowRequest, GetTreeRequest, Order};
+use burgess_core::storage::Day;
 use jiff::Timestamp;
 
 use super::error::RequestError;
 use crate::pages::PageLimits;
-use crate::queries::PageRequest;
 
 /// The options of a lookup request, as given.
 #[derive(Debug, Clone, Copy)]
@@ -14,6 +16,15 @@ pub(super) struct PageOptions<'a> {
     limit: Option<u32>,
     order: i32,
     cursor: Option<&'a str>,
+}
+
+/// The options of a lookup request, checked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PageRequest {
+    /// The last day that the lookup must read.
+    pub(super) until: Option<Timestamp>,
+    /// The number of rows that the page can hold.
+    pub(super) limit: NonZeroUsize,
 }
 
 impl PageOptions<'_> {
@@ -28,18 +39,23 @@ impl PageOptions<'_> {
         if self.cursor.is_some_and(|cursor| !cursor.is_empty()) {
             return Err(RequestError::Cursor);
         }
-        let until = self
-            .until_ms
-            .map(|until_ms| {
-                Timestamp::from_millisecond(until_ms).map_err(|_| RequestError::Until { until_ms })
-            })
-            .transpose()?;
+        let until = self.until_ms.map(until).transpose()?;
         // A limit that is too large for usize is also over the maximum.
         let limit = self
             .limit
             .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX));
-        Ok(PageRequest::new(until, limit, limits)?)
+        Ok(PageRequest {
+            until,
+            limit: limits.limit(limit)?,
+        })
     }
+}
+
+fn until(until_ms: i64) -> Result<Timestamp, RequestError> {
+    let until =
+        Timestamp::from_millisecond(until_ms).map_err(|_| RequestError::UntilMs { until_ms })?;
+    Day::utc(until).map_err(|source| RequestError::UntilDay { until, source })?;
+    Ok(until)
 }
 
 /// The requests that have the same options, with the same names.
