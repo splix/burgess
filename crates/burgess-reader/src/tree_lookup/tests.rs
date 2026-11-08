@@ -12,6 +12,7 @@ use super::*;
 use crate::manifests::{ManifestCacheConfig, ManifestReadError};
 use crate::parquet_file::FileProblem;
 use crate::states_file::StatesFileProblem;
+use crate::states_lookup::StatesLookupError;
 use crate::test_support::{Days, at, days_ago, flush, minted_on, noon, state_row, subflows};
 
 /// `count` rows of `tree` written on `day`, every third a split.
@@ -344,7 +345,7 @@ async fn an_unreadable_manifest_is_reported_and_the_walk_goes_on() {
     assert_eq!(found.rows, of(tree, &[&before, &after]));
     assert!(matches!(
         found.problems.as_slice(),
-        [TreeLookupError::Manifest(ManifestReadError::Invalid { day, .. })] if *day == broken
+        [StatesLookupError::Manifest(ManifestReadError::Invalid { day, .. })] if *day == broken
     ));
 }
 
@@ -372,7 +373,7 @@ async fn a_listed_file_that_is_gone_is_reported_and_the_others_are_read() {
         .await;
 
     assert_eq!(found.rows, of(tree, &[&kept]));
-    let [TreeLookupError::File(error)] = found.problems.as_slice() else {
+    let [StatesLookupError::File(error)] = found.problems.as_slice() else {
         panic!("unexpected problems: {:?}", found.problems);
     };
     assert_eq!(error.file(), &gone);
@@ -445,7 +446,7 @@ async fn a_flow_reports_what_the_tree_could_not_read() {
     assert_eq!(subflows(&found.rows), [1]);
     assert!(matches!(
         found.problems.as_slice(),
-        [TreeLookupError::Manifest(ManifestReadError::Invalid { day, .. })] if *day == broken
+        [StatesLookupError::Manifest(ManifestReadError::Invalid { day, .. })] if *day == broken
     ));
 }
 

@@ -6,8 +6,7 @@ use std::sync::Arc;
 use burgess_core::storage::{Day, FileStats, ObjectName};
 
 use super::FoundStates;
-use super::config::StatesLookupConfig;
-use crate::day_scan::{DayScan, days_back, newest_day, oldest_day};
+use crate::day_scan::{DayScan, ScanConfig, days_back, newest_day, oldest_day};
 use crate::manifests::{FlushGroup, ManifestCache};
 use crate::states_file::{StatesFileReader, StatesFilter};
 
@@ -15,16 +14,12 @@ use crate::states_file::{StatesFileReader, StatesFilter};
 pub struct StatesLookup {
     manifests: Arc<ManifestCache>,
     files: StatesFileReader,
-    config: StatesLookupConfig,
+    config: ScanConfig,
 }
 
 impl StatesLookup {
     /// A lookup over the days `manifests` lists and the files `files` reads.
-    pub fn new(
-        manifests: Arc<ManifestCache>,
-        files: StatesFileReader,
-        config: StatesLookupConfig,
-    ) -> Self {
+    pub fn new(manifests: Arc<ManifestCache>, files: StatesFileReader, config: ScanConfig) -> Self {
         StatesLookup {
             manifests,
             files,
@@ -46,8 +41,7 @@ impl StatesLookup {
         let filter = Arc::new(filter);
         let scan = DayScan {
             manifests: &self.manifests,
-            concurrent_days: self.config.concurrent_days,
-            concurrent_files: self.config.concurrent_files,
+            config: self.config,
         };
         let pick = |group: &FlushGroup| {
             group
@@ -64,8 +58,9 @@ impl StatesLookup {
         scan.scan(days, pick, read, wanted).await
     }
 
-    /// The days to visit, newest first. None when a time of the window or
-    /// today is on a day that a `Day` cannot name.
+    /// The days to visit, newest first. No day when a time of the window or
+    /// today is on a day that a `Day` cannot name, which the request checks
+    /// prevent for the window.
     fn days(&self, filter: &StatesFilter) -> Vec<Day> {
         let oldest = oldest_day(
             Some(filter.since),

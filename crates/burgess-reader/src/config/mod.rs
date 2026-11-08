@@ -22,11 +22,10 @@ use figment::Figment;
 use figment::providers::{Env, Format, Toml};
 
 use self::file::FileConfig;
+use crate::day_scan::ScanConfig;
 use crate::manifests::ManifestCacheConfig;
 use crate::pages::{PageLimits, PageLimitsError};
 use crate::parquet_file::FileReadConfig;
-use crate::refs_lookup::RefsLookupConfig;
-use crate::states_lookup::StatesLookupConfig;
 use crate::tree_lookup::TreeLookupConfig;
 
 /// Prefix of the environment variables that override settings.
@@ -49,10 +48,10 @@ pub struct Settings {
     pub lookup: TreeLookupConfig,
     /// How refs lookups walk. `lookup.concurrent_files` and
     /// `lookup.days_before` apply to the two lookups.
-    pub refs: RefsLookupConfig,
+    pub refs: ScanConfig,
     /// How states lookups walk. `lookup.concurrent_files` and
     /// `lookup.days_before` apply to them too.
-    pub states: StatesLookupConfig,
+    pub states: ScanConfig,
 }
 
 /// Why the settings cannot be used.

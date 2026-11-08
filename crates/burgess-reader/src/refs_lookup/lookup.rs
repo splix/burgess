@@ -6,10 +6,9 @@ use std::sync::Arc;
 use burgess_core::storage::{Day, FileStats, ObjectName};
 
 use super::FoundRefs;
-use super::config::RefsLookupConfig;
 use super::error::UnboundedWalk;
 use super::query::RefsQuery;
-use crate::day_scan::{DayScan, days_back, newest_day, oldest_day};
+use crate::day_scan::{DayScan, ScanConfig, days_back, newest_day, oldest_day};
 use crate::manifests::{FlushGroup, ManifestCache};
 use crate::refs_file::RefsFileReader;
 
@@ -17,16 +16,12 @@ use crate::refs_file::RefsFileReader;
 pub struct RefsLookup {
     manifests: Arc<ManifestCache>,
     files: RefsFileReader,
-    config: RefsLookupConfig,
+    config: ScanConfig,
 }
 
 impl RefsLookup {
     /// A lookup over the days `manifests` lists and the files `files` reads.
-    pub fn new(
-        manifests: Arc<ManifestCache>,
-        files: RefsFileReader,
-        config: RefsLookupConfig,
-    ) -> Self {
+    pub fn new(manifests: Arc<ManifestCache>, files: RefsFileReader, config: ScanConfig) -> Self {
         RefsLookup {
             manifests,
             files,
@@ -50,8 +45,7 @@ impl RefsLookup {
         let days = self.days(query)?;
         let scan = DayScan {
             manifests: &self.manifests,
-            concurrent_days: self.config.concurrent_days,
-            concurrent_files: self.config.concurrent_files,
+            config: self.config,
         };
         let pick =
             |group: &FlushGroup| (group.refs().rows > 0).then(|| (group.refs_file(), group.refs()));

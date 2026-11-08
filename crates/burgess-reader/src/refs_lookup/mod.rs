@@ -12,12 +12,10 @@
 //! is late by more than a day stores a reference two or more days after
 //! its time, and a lookup with `until` does not find it.
 
-mod config;
 mod error;
 mod lookup;
 mod query;
 
-pub use config::RefsLookupConfig;
 pub use error::{RefsLookupError, UnboundedWalk};
 pub use lookup::RefsLookup;
 pub use query::RefsQuery;

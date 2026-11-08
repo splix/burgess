@@ -10,6 +10,7 @@ use jiff::Timestamp;
 use object_store::ObjectStoreExt;
 
 use super::*;
+use crate::day_scan::ScanConfig;
 use crate::refs_file::RefKey;
 use crate::test_support::{Days, around, at, days_ago, minted_on, noon};
 
@@ -42,7 +43,7 @@ fn wanted(rows: usize) -> NonZeroUsize {
 }
 
 async fn refs(days: &Days, query: &RefsQuery) -> FoundRefs {
-    days.refs_lookup(RefsLookupConfig::default())
+    days.refs_lookup(ScanConfig::default())
         .refs(query, wanted(100))
         .await
         .unwrap()
@@ -245,9 +246,9 @@ async fn the_walk_stops_when_it_has_the_rows_wanted() {
     .await;
 
     let found = days
-        .refs_lookup(RefsLookupConfig {
+        .refs_lookup(ScanConfig {
             concurrent_files: wanted(1),
-            ..RefsLookupConfig::default()
+            ..ScanConfig::default()
         })
         .refs(&query("ORD-1"), wanted(1))
         .await
@@ -299,9 +300,9 @@ async fn since_ends_the_walk_on_its_day() {
 async fn days_before_extend_the_walk_before_since() {
     let since_day = days_ago(3);
     let days = Days::new();
-    let config = RefsLookupConfig {
+    let config = ScanConfig {
         days_before: 1,
-        ..RefsLookupConfig::default()
+        ..ScanConfig::default()
     };
 
     days.refs_lookup(config)
@@ -352,11 +353,7 @@ async fn a_walk_without_an_end_is_refused() {
         days.store.clone(),
         crate::parquet_file::FileReadConfig::default(),
     );
-    let lookup = RefsLookup::new(
-        std::sync::Arc::new(manifests),
-        files,
-        RefsLookupConfig::default(),
-    );
+    let lookup = RefsLookup::new(std::sync::Arc::new(manifests), files, ScanConfig::default());
 
     let unbounded = lookup.refs(&query("ORD-1"), wanted(1)).await;
     let bounded = lookup

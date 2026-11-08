@@ -8,14 +8,12 @@
 //! the tree, and only the others are opened.
 
 mod config;
-mod error;
 mod found;
 mod lookup;
 mod subtree;
 mod walk;
 
 pub use config::TreeLookupConfig;
-pub use error::TreeLookupError;
 pub use found::FoundTree;
 pub use lookup::TreeLookup;
 

@@ -12,11 +12,9 @@
 //! than a day stores a state two or more days after its time, and a lookup
 //! does not find it.
 
-mod config;
 mod error;
 mod lookup;
 
-pub use config::StatesLookupConfig;
 pub use error::StatesLookupError;
 pub use lookup::StatesLookup;
 

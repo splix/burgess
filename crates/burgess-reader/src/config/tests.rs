@@ -51,8 +51,8 @@ fn minimal_file_gets_every_default() {
         assert_eq!(settings.manifests, ManifestCacheConfig::default());
         assert_eq!(settings.files, FileReadConfig::default());
         assert_eq!(settings.lookup, TreeLookupConfig::default());
-        assert_eq!(settings.refs, RefsLookupConfig::default());
-        assert_eq!(settings.states, StatesLookupConfig::default());
+        assert_eq!(settings.refs, ScanConfig::default());
+        assert_eq!(settings.states, ScanConfig::default());
     });
 }
 
@@ -118,7 +118,7 @@ concurrent_days = 3
         );
         assert_eq!(
             settings.refs,
-            RefsLookupConfig {
+            ScanConfig {
                 concurrent_days: NonZeroUsize::new(6).unwrap(),
                 concurrent_files: NonZeroUsize::new(8).unwrap(),
                 days_before: 1,
@@ -126,7 +126,7 @@ concurrent_days = 3
         );
         assert_eq!(
             settings.states,
-            StatesLookupConfig {
+            ScanConfig {
                 concurrent_days: NonZeroUsize::new(3).unwrap(),
                 concurrent_files: NonZeroUsize::new(8).unwrap(),
                 days_before: 1,

@@ -15,11 +15,10 @@ use tokio::net::TcpStream;
 use tonic::transport::Channel;
 
 use super::*;
+use crate::day_scan::ScanConfig;
 use crate::manifests::ManifestCacheConfig;
 use crate::pages::PageLimits;
 use crate::parquet_file::FileReadConfig;
-use crate::refs_lookup::RefsLookupConfig;
-use crate::states_lookup::StatesLookupConfig;
 use crate::test_support::{at, days_ago, flush, minted_on, put_day, state_row};
 use crate::tree_lookup::TreeLookupConfig;
 
@@ -33,8 +32,8 @@ fn settings(store: &Path) -> Settings {
         manifests: ManifestCacheConfig::default(),
         files: FileReadConfig::default(),
         lookup: TreeLookupConfig::default(),
-        refs: RefsLookupConfig::default(),
-        states: StatesLookupConfig::default(),
+        refs: ScanConfig::default(),
+        states: ScanConfig::default(),
     }
 }
 

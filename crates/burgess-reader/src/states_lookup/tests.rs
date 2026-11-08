@@ -11,6 +11,7 @@ use jiff::{SignedDuration, Timestamp};
 use object_store::ObjectStoreExt;
 
 use super::*;
+use crate::day_scan::ScanConfig;
 use crate::manifests::{ManifestCache, ManifestCacheConfig};
 use crate::states_file::StatesFilter;
 use crate::test_support::{Days, around, at, days_ago, minted_on, noon, state_row};
@@ -44,7 +45,7 @@ fn wanted(rows: usize) -> NonZeroUsize {
 }
 
 async fn states(days: &Days, filter: StatesFilter) -> FoundStates {
-    days.states_lookup(StatesLookupConfig::default())
+    days.states_lookup(ScanConfig::default())
         .states(filter, wanted(100))
         .await
 }
@@ -166,9 +167,9 @@ async fn days_before_find_a_state_stored_the_day_before_its_time() {
     let early = state(minted_on(day, 1), day, 0, &[]);
     let days = Days::new();
     days.put(flushed, &[std::slice::from_ref(&early)]).await;
-    let with_days_before = |days_before| StatesLookupConfig {
+    let with_days_before = |days_before| ScanConfig {
         days_before,
-        ..StatesLookupConfig::default()
+        ..ScanConfig::default()
     };
 
     let without = days
@@ -270,9 +271,9 @@ async fn the_walk_stops_when_it_has_the_states_wanted() {
     .await;
 
     let found = days
-        .states_lookup(StatesLookupConfig {
+        .states_lookup(ScanConfig {
             concurrent_files: wanted(1),
-            ..StatesLookupConfig::default()
+            ..ScanConfig::default()
         })
         .states(filter(old, days_ago(0)), wanted(1))
         .await;

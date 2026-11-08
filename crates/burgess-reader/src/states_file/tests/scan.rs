@@ -285,7 +285,7 @@ async fn only_the_payload_pages_of_the_passing_states_are_fetched() {
 }
 
 #[tokio::test]
-async fn rejects_a_file_without_a_column_of_the_filter() {
+async fn rejects_a_file_without_a_column_whatever_rows_pass() {
     let written = Fixture::new(&[(tree(2), 10)], 1 << 20).await;
     let fixture = written
         .rewritten(layout(Some(SCHEMA_VERSION)).build(), |mut batch| {
@@ -293,17 +293,33 @@ async fn rejects_a_file_without_a_column_of_the_filter() {
             batch
         })
         .await;
+    let filters = [
+        ("some rows pass", filter("step-3")),
+        ("no row passes", filter("step-9")),
+        (
+            "the column is in the filter",
+            StatesFilter {
+                meta: labels(&[("n", "3")]),
+                ..filter("step-3")
+            },
+        ),
+    ];
 
-    let error = fixture
-        .scan_with(FileReadConfig::default(), filter("step-3"))
-        .await
-        .unwrap_err();
+    for (case, filter) in filters {
+        let error = fixture
+            .scan_with(FileReadConfig::default(), filter)
+            .await
+            .unwrap_err();
 
-    assert_eq!(error.file(), &fixture.name);
-    assert!(matches!(
-        error.problem(),
-        StatesFileProblem::File(FileProblem::Column { column: "meta" })
-    ));
+        assert_eq!(error.file(), &fixture.name);
+        assert!(
+            matches!(
+                error.problem(),
+                StatesFileProblem::File(FileProblem::Column { column: "meta" })
+            ),
+            "{case}: {error:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -349,7 +365,7 @@ async fn rejects_a_tree_column_of_another_width() {
 }
 
 #[tokio::test]
-async fn rejects_a_column_of_the_filter_of_another_type() {
+async fn rejects_a_column_of_another_type() {
     let written = Fixture::new(&[(tree(2), 10)], 1 << 20).await;
     let fixture = with_values(&written, StatesColumn::Ts, |rows| {
         Arc::new(StringArray::from(vec!["noon"; rows]))

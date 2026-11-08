@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow_array::{BooleanArray, MapArray, RecordBatch, StringArray, TimestampMillisecondArray};
-use arrow_schema::{ArrowError, Schema};
+use arrow_schema::ArrowError;
 use burgess_core::storage::{EntryKind, StatesColumn};
 use jiff::Timestamp;
 use parquet::arrow::ProjectionMask;
@@ -12,7 +12,6 @@ use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderMetadata, RowFil
 
 use super::decode::{Meta, column};
 use super::error::StatesFileProblem;
-use crate::parquet_file::FileProblem;
 
 /// The states to keep: of one service and category, in a time window, with
 /// some labels.
@@ -35,29 +34,10 @@ pub struct StatesFilter {
 }
 
 impl StatesFilter {
-    /// The filter as the decoder applies it to the rows of a file.
-    ///
-    /// The columns are checked here, before any row is read, thus a file of
-    /// another layout gives the same problem as when the rows are decoded.
-    pub(super) fn row_filter(
-        self: &Arc<Self>,
-        metadata: &ArrowReaderMetadata,
-    ) -> Result<RowFilter, StatesFileProblem> {
+    /// The filter as the decoder applies it to the rows of a file, whose
+    /// columns are checked.
+    pub(super) fn row_filter(self: &Arc<Self>, metadata: &ArrowReaderMetadata) -> RowFilter {
         let columns = self.columns();
-        let fields = columns
-            .iter()
-            .map(|column| {
-                metadata
-                    .schema()
-                    .field_with_name(column.name())
-                    .cloned()
-                    .map_err(|_| FileProblem::Column {
-                        column: column.name(),
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let empty = RecordBatch::new_empty(Arc::new(Schema::new(fields)));
-        FilterColumns::new(&empty, self.has_meta())?;
         let mask = ProjectionMask::columns(
             metadata.parquet_schema(),
             columns.iter().map(|column| column.name()),
@@ -68,7 +48,7 @@ impl StatesFilter {
                 .passes(&batch)
                 .map_err(|problem| ArrowError::ExternalError(Box::new(problem)))
         });
-        Ok(RowFilter::new(vec![Box::new(predicate)]))
+        RowFilter::new(vec![Box::new(predicate)])
     }
 
     /// The columns that the filter reads. Without labels to match, the

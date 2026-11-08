@@ -394,10 +394,9 @@ async fn states(days: &Days, request: ListStatesRequest) -> Vec<list_states_resp
         .collect()
 }
 
-/// `ago` before now, as a time and as unix milliseconds.
-fn before_now(ago: SignedDuration) -> (Timestamp, u64) {
-    let time = Timestamp::now() - ago;
-    (time, time.as_millisecond() as u64)
+/// `ago` before now, in unix milliseconds.
+fn before_now(ago: SignedDuration) -> u64 {
+    (Timestamp::now() - ago).as_millisecond() as u64
 }
 
 /// Stores `rows` as one flush on the day of their first time.
@@ -419,7 +418,7 @@ fn state_times(items: &[list_states_response::Item]) -> Vec<i64> {
 
 #[tokio::test]
 async fn states_answer_with_a_message_per_state() {
-    let (_, ms) = before_now(SignedDuration::from_hours(1));
+    let ms = before_now(SignedDuration::from_hours(1));
     let tree = minted_on(days_ago(0), 5);
     let mut row = state_row(tree, 2, ms, None);
     if let StateEntry::State { meta, payload, .. } = &mut row.entry {
@@ -453,8 +452,8 @@ async fn states_answer_with_a_message_per_state() {
 #[tokio::test]
 async fn without_since_the_window_is_the_day_before_until() {
     let tree = minted_on(days_ago(0), 5);
-    let (_, recent) = before_now(SignedDuration::from_hours(1));
-    let (_, old) = before_now(SignedDuration::from_hours(25));
+    let recent = before_now(SignedDuration::from_hours(1));
+    let old = before_now(SignedDuration::from_hours(25));
     let days = Days::new();
     put_states(&days, vec![state_row(tree, 0, recent, None)]).await;
     put_states(&days, vec![state_row(tree, 1, old, None)]).await;
@@ -463,7 +462,7 @@ async fn without_since_the_window_is_the_day_before_until() {
     let longer = states(
         &days,
         ListStatesRequest {
-            since_ms: Some(before_now(SignedDuration::from_hours(26)).1 as i64),
+            since_ms: Some(before_now(SignedDuration::from_hours(26)) as i64),
             ..states_request()
         },
     )
@@ -471,7 +470,7 @@ async fn without_since_the_window_is_the_day_before_until() {
     let ending_earlier = states(
         &days,
         ListStatesRequest {
-            until_ms: Some(before_now(SignedDuration::from_hours(2)).1 as i64),
+            until_ms: Some(before_now(SignedDuration::from_hours(2)) as i64),
             ..states_request()
         },
     )
@@ -484,7 +483,7 @@ async fn without_since_the_window_is_the_day_before_until() {
 
 #[tokio::test]
 async fn a_payload_that_is_not_json_comes_with_a_problem_before_its_state() {
-    let (_, ms) = before_now(SignedDuration::from_hours(1));
+    let ms = before_now(SignedDuration::from_hours(1));
     let mut row = state_row(minted_on(days_ago(0), 5), 0, ms, None);
     if let StateEntry::State { payload, .. } = &mut row.entry {
         *payload = b"not json".to_vec();
@@ -507,7 +506,7 @@ async fn a_payload_that_is_not_json_comes_with_a_problem_before_its_state() {
 
 #[tokio::test]
 async fn a_limit_ends_the_states_with_a_message_that_tells_they_were_cut() {
-    let (_, ms) = before_now(SignedDuration::from_hours(1));
+    let ms = before_now(SignedDuration::from_hours(1));
     let tree = minted_on(days_ago(0), 5);
     let days = Days::new();
     put_states(
@@ -533,8 +532,8 @@ async fn a_limit_ends_the_states_with_a_message_that_tells_they_were_cut() {
 }
 
 #[tokio::test]
-async fn an_empty_where_is_no_filter() {
-    let (_, ms) = before_now(SignedDuration::from_hours(1));
+async fn a_blank_where_is_no_filter() {
+    let ms = before_now(SignedDuration::from_hours(1));
     let days = Days::new();
     put_states(
         &days,
@@ -542,17 +541,19 @@ async fn an_empty_where_is_no_filter() {
     )
     .await;
 
-    let items = states(
-        &days,
-        ListStatesRequest {
-            r#where: Some(String::new()),
-            cursor: Some(String::new()),
-            ..states_request()
-        },
-    )
-    .await;
+    for blank in ["", " \t"] {
+        let items = states(
+            &days,
+            ListStatesRequest {
+                r#where: Some(blank.into()),
+                cursor: Some(String::new()),
+                ..states_request()
+            },
+        )
+        .await;
 
-    assert_eq!(state_times(&items), [ms as i64]);
+        assert_eq!(state_times(&items), [ms as i64], "{blank:?}");
+    }
 }
 
 #[tokio::test]
@@ -629,7 +630,7 @@ async fn a_states_request_the_service_cannot_serve_is_refused() {
 
 #[tokio::test]
 async fn what_the_states_lookup_could_not_read_comes_before_the_states() {
-    let (_, ms) = before_now(SignedDuration::from_hours(1));
+    let ms = before_now(SignedDuration::from_hours(1));
     let days = Days::new();
     put_states(
         &days,

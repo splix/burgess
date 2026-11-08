@@ -2,7 +2,7 @@
 
 use burgess_core::storage::StateRow;
 
-use super::error::TreeLookupError;
+use crate::states_lookup::StatesLookupError;
 
 /// The rows a lookup could read, and what it could not read.
 ///
@@ -16,5 +16,5 @@ pub struct FoundTree {
     /// stable between calls but not sorted across files.
     pub rows: Vec<StateRow>,
     /// Each manifest or file that could not be read, in walk order.
-    pub problems: Vec<TreeLookupError>,
+    pub problems: Vec<StatesLookupError>,
 }

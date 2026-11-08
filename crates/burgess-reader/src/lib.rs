@@ -10,6 +10,8 @@ pub mod parquet_file;
 
 pub mod states_file;
 
+pub mod filter;
+
 pub mod refs_file;
 
 pub mod day_scan;

@@ -8,11 +8,10 @@ use burgess_store::StoreConfig;
 use serde::Deserialize;
 
 use super::{ConfigError, Settings};
+use crate::day_scan::ScanConfig;
 use crate::manifests::ManifestCacheConfig;
 use crate::pages::PageLimits;
 use crate::parquet_file::FileReadConfig;
-use crate::refs_lookup::RefsLookupConfig;
-use crate::states_lookup::StatesLookupConfig;
 use crate::tree_lookup::TreeLookupConfig;
 
 /// The whole file. Unknown keys are errors, so a misspelled setting is
@@ -126,7 +125,7 @@ impl Default for LookupSection {
 impl Default for RefsSection {
     fn default() -> Self {
         RefsSection {
-            concurrent_days: RefsLookupConfig::default().concurrent_days,
+            concurrent_days: ScanConfig::default().concurrent_days,
         }
     }
 }
@@ -134,7 +133,7 @@ impl Default for RefsSection {
 impl Default for StatesSection {
     fn default() -> Self {
         StatesSection {
-            concurrent_days: StatesLookupConfig::default().concurrent_days,
+            concurrent_days: ScanConfig::default().concurrent_days,
         }
     }
 }
@@ -165,12 +164,12 @@ impl TryFrom<FileConfig> for Settings {
                 days_before: file.lookup.days_before,
                 concurrent_files: file.lookup.concurrent_files,
             },
-            refs: RefsLookupConfig {
+            refs: ScanConfig {
                 concurrent_days: file.refs.concurrent_days,
                 concurrent_files: file.lookup.concurrent_files,
                 days_before: file.lookup.days_before,
             },
-            states: StatesLookupConfig {
+            states: ScanConfig {
                 concurrent_days: file.states.concurrent_days,
                 concurrent_files: file.lookup.concurrent_files,
                 days_before: file.lookup.days_before,

@@ -1,9 +1,10 @@
-//! Why part of a states lookup failed.
+//! Why part of a lookup of states files failed.
 
 use crate::manifests::ManifestReadError;
 use crate::states_file::StatesReadError;
 
-/// Why part of a states lookup failed. Each names the day or file it failed
+/// Why part of a lookup of states files failed: a states lookup, or a tree
+/// lookup, which reads the same files. Each names the day or file it failed
 /// on.
 #[derive(Debug, thiserror::Error)]
 pub enum StatesLookupError {

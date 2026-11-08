@@ -4,6 +4,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use burgess_core::flow::TreeId;
 use burgess_core::storage::{FileStats, ObjectName, StateRow, StatesColumn};
 use futures::TryStreamExt;
@@ -23,6 +24,7 @@ use crate::parquet_file::{ColumnKey, FileProblem, FileReadConfig, OpenFile, leaf
 /// It is told the file size by the manifest rather than asking the store,
 /// so the footer comes with the first request and no file is ever listed or
 /// probed with a HEAD.
+#[derive(Clone)]
 pub struct StatesFileReader {
     store: Arc<dyn ObjectStore>,
     config: FileReadConfig,
@@ -102,8 +104,11 @@ impl StatesFileReader {
     ) -> Result<Vec<StoredState>, StatesFileProblem> {
         let open = self.open(file, stats).await?;
         // Checked before any row passes, as a tree read checks it.
-        tree_column(open.metadata())?;
-        let row_filter = filter.row_filter(open.metadata())?;
+        // The columns are checked before any row is read, thus a file of
+        // another layout is a problem whether or not a row passes.
+        let schema = Arc::clone(open.metadata().schema());
+        StatesBatch::try_from(&RecordBatch::new_empty(schema))?;
+        let row_filter = filter.row_filter(open.metadata());
         let mut batches = open.filter(row_filter, limit)?;
         let mut states = Vec::new();
         while let Some(batch) = batches.try_next().await? {

@@ -77,11 +77,10 @@ impl Server {
         );
         let store = settings.store.open_existing()?;
         let manifests = Arc::new(ManifestCache::new(store.clone(), settings.manifests));
-        let trees = StatesFileReader::new(store.clone(), settings.files);
         let states = StatesFileReader::new(store.clone(), settings.files);
         let refs = RefsFileReader::new(store, settings.files);
         let queries = Arc::new(Queries {
-            lookup: TreeLookup::new(manifests.clone(), trees, settings.lookup),
+            lookup: TreeLookup::new(manifests.clone(), states.clone(), settings.lookup),
             refs: RefsLookup::new(manifests.clone(), refs, settings.refs),
             states: StatesLookup::new(manifests, states, settings.states),
             limits: settings.pages,

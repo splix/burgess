@@ -29,7 +29,8 @@ impl Queries {
         if request.category.is_empty() {
             return Err(RequestError::NoCategory);
         }
-        if non_empty(request.r#where.as_deref()).is_some() {
+        // The filter ignores spaces around it, thus only spaces is no filter.
+        if non_empty(request.r#where.as_deref().map(str::trim)).is_some() {
             return Err(RequestError::Where);
         }
         let page = PageOptions::from(&request).check(&self.limits)?;
