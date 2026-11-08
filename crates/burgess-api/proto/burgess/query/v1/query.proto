@@ -61,8 +61,11 @@ message ListStatesRequest {
   string service = 1;
   // The category of the states. Necessary. The comparison is exact.
   string category = 2;
-  // A filter expression on the payload, for example `amount > 100`. Not
-  // served at this time.
+  // A filter expression on the payload, for example `amount > 100`,
+  // `tx.inputs[].value >= 1000` or `fee in 10..=20`. A value of another
+  // JSON type never matches, and one element of each `[]` is enough. An
+  // expression that breaks the grammar is refused with INVALID_ARGUMENT
+  // and the column of the error. Empty or only spaces is no filter.
   optional string where = 3;
   // Labels that each state must have, with these values.
   map<string, string> meta = 4;

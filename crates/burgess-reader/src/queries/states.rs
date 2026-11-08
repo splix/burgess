@@ -7,7 +7,8 @@ use jiff::{SignedDuration, Timestamp};
 
 use super::error::{RequestError, TimeField};
 use super::options::{PageOptions, on_a_day, time};
-use super::{Queries, log_problems, non_empty};
+use super::{Queries, log_problems};
+use crate::filter::Filter;
 use crate::states_file::StatesFilter;
 
 /// The window of a request without `since`: the day of states before
@@ -29,10 +30,14 @@ impl Queries {
         if request.category.is_empty() {
             return Err(RequestError::NoCategory);
         }
-        // The filter ignores spaces around it, thus only spaces is no filter.
-        if non_empty(request.r#where.as_deref().map(str::trim)).is_some() {
-            return Err(RequestError::Where);
-        }
+        // Only spaces is no filter. The text is parsed as sent, thus the
+        // column of an error counts in it.
+        let payload = request
+            .r#where
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .map(str::parse::<Filter>)
+            .transpose()?;
         let page = PageOptions::from(&request).check(&self.limits)?;
         let until = page.until.unwrap_or_else(now);
         let since = match request.since_ms {
@@ -51,6 +56,7 @@ impl Queries {
             meta: mem::take(&mut request.meta),
             since,
             until,
+            payload,
         };
         let lookup = format!("states of {}/{}", filter.service, filter.category);
         // One row more than the page holds tells that the page is cut.

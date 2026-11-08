@@ -17,6 +17,7 @@ fn filter(category: &str) -> StatesFilter {
         meta: BTreeMap::new(),
         since: ms(0),
         until: ms(1_000_000),
+        payload: None,
     }
 }
 
@@ -406,4 +407,90 @@ async fn rejects_an_unknown_kind_of_a_row_that_passes() {
         ),
         "{error:?}"
     );
+}
+
+/// The filter of `category`, with `payload` as its payload filter.
+fn with_payload(category: &str, payload: &str) -> StatesFilter {
+    StatesFilter {
+        payload: Some(payload.parse().unwrap()),
+        ..filter(category)
+    }
+}
+
+/// The index `i` of a row of [`rows_of`], which its payload holds.
+fn index_of(row: &StateRow) -> u64 {
+    u64::from(row.time) - FIRST_MS
+}
+
+#[tokio::test]
+async fn a_payload_filter_keeps_the_states_whose_payload_passes() {
+    let fixture = Fixture::new(&[(tree(1), 300), (tree(2), 300)], 1 << 20).await;
+
+    let states = fixture.scan(with_payload("step-3", "i in 100..200")).await;
+
+    let expected =
+        fixture.states(|row| row.category == "step-3" && (100..200).contains(&index_of(row)));
+    assert!(!expected.is_empty());
+    assert_eq!(states, expected);
+}
+
+#[tokio::test]
+async fn the_limit_counts_the_states_that_pass_the_payload_filter() {
+    let fixture = Fixture::new(&[(tree(1), 3000), (tree(2), 3000)], 1 << 20).await;
+
+    let states = fixture
+        .scan_up_to(with_payload("step-3", "i >= 2000"), 5)
+        .await;
+
+    let expected = fixture.states(|row| row.category == "step-3" && index_of(row) >= 2000);
+    assert_eq!(states, expected[..5]);
+}
+
+#[tokio::test]
+async fn a_payload_that_is_not_json_passes_no_payload_filter() {
+    let written = Fixture::new(&[(tree(2), 20)], 1 << 20).await;
+    let fixture = with_values(&written, StatesColumn::Payload, |rows| {
+        Arc::new(BinaryArray::from(vec![b"not json".as_slice(); rows]))
+    })
+    .await;
+
+    let without = fixture.scan(filter("step-3")).await;
+    let with = fixture.scan(with_payload("step-3", "i != 0")).await;
+
+    assert!(!without.is_empty(), "the payload filter drops them");
+    assert_eq!(with, []);
+}
+
+#[tokio::test]
+async fn a_bad_row_that_the_payload_filter_refuses_does_not_fail_the_file() {
+    let written = Fixture::new(&[(tree(1), 3000)], 1 << 20).await;
+    let passes = |row: &StateRow| row.category == "step-3" && stored(row).is_some();
+    let bad = written.rows.iter().rposition(passes).unwrap();
+    let fixture = with_values(&written, StatesColumn::PayloadType, |rows| {
+        let types = (0..rows).map(|row| if row == bad { "yaml" } else { "json" });
+        Arc::new(StringArray::from_iter_values(types))
+    })
+    .await;
+    let good = |row: &StateRow| passes(row) && *row != fixture.rows[bad];
+
+    let without = fixture
+        .scan_with(FileReadConfig::default(), filter("step-3"))
+        .await;
+    let all = fixture.scan(with_payload("step-3", "i >= 0")).await;
+    let up_to_five = fixture
+        .scan_up_to(with_payload("step-3", "i >= 0"), 5)
+        .await;
+
+    assert!(
+        matches!(
+            without.as_ref().map_err(StatesReadError::problem),
+            Err(StatesFileProblem::Row {
+                problem: InvalidRow::UnknownPayloadType(_),
+                ..
+            })
+        ),
+        "without a payload filter the bad row is decoded: {without:?}"
+    );
+    assert_eq!(all, fixture.states(good), "the bad row is left out");
+    assert_eq!(up_to_five, fixture.states(good)[..5]);
 }

@@ -3,6 +3,7 @@
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::{self, AtomicUsize};
 
 use arrow_array::RecordBatch;
 use burgess_core::flow::TreeId;
@@ -60,8 +61,9 @@ impl StatesFileReader {
     /// pass `filter`, in the order the file stores them, up to `limit`.
     ///
     /// Splits are not states, thus they are never kept. The payload pages
-    /// are fetched only where a row passes. The read stops at `limit`
-    /// states, thus a file of many states costs no more than the page needs.
+    /// are fetched only where a row passes the filters on the other columns.
+    /// The read stops at `limit` states that pass all filters, thus a file
+    /// of many states costs no more than the page needs.
     pub async fn states(
         &self,
         file: &ObjectName,
@@ -103,16 +105,23 @@ impl StatesFileReader {
         limit: NonZeroUsize,
     ) -> Result<Vec<StoredState>, StatesFileProblem> {
         let open = self.open(file, stats).await?;
-        // Checked before any row passes, as a tree read checks it.
         // The columns are checked before any row is read, thus a file of
         // another layout is a problem whether or not a row passes.
         let schema = Arc::clone(open.metadata().schema());
         StatesBatch::try_from(&RecordBatch::new_empty(schema))?;
-        let row_filter = filter.row_filter(open.metadata());
+        let untested = Arc::new(AtomicUsize::new(0));
+        let row_filter = filter.row_filter(open.metadata(), &untested);
         let mut batches = open.filter(row_filter, limit)?;
         let mut states = Vec::new();
         while let Some(batch) = batches.try_next().await? {
             states.extend(StatesBatch::try_from(&batch)?.states()?);
+        }
+        let untested = untested.load(atomic::Ordering::Relaxed);
+        if untested > 0 {
+            // The answer has no problem for these, since the states may not
+            // pass the filter, but the operator can see that some were not
+            // tested.
+            tracing::warn!(%file, untested, "payloads that are not JSON were not tested by the filter");
         }
         Ok(states)
     }

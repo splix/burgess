@@ -7,8 +7,9 @@
 //! gives an empty answer, which a caller could take for "no state matches".
 
 mod error;
+mod evaluate;
 mod expression;
-mod number;
+mod order;
 mod parser;
 
 pub use error::{FilterError, FilterErrorKind, ScalarType};

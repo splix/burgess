@@ -17,7 +17,9 @@ use jiff::{SignedDuration, Timestamp};
 use tonic::{Code, Request, Status};
 
 use super::*;
-use crate::test_support::{Days, at, days_ago, flush, messages, minted_on, noon, state_row};
+use crate::test_support::{
+    Days, at, days_ago, flush, messages, minted_on, noon, state_row, state_with_payload,
+};
 
 /// A tree of four flows written on `day`: the root splits off 1 and 4, and
 /// 1 splits off 2.
@@ -405,25 +407,28 @@ async fn put_states(days: &Days, rows: Vec<StateRow>) {
     days.put(day, &[&flush(vec![rows])]).await;
 }
 
+/// The state rows of `items`.
+fn state_rows(
+    items: &[list_states_response::Item],
+) -> impl Iterator<Item = &burgess_api::grpc::StateRow> {
+    items.iter().filter_map(|item| match item {
+        list_states_response::Item::Row(row) => Some(row),
+        _ => None,
+    })
+}
+
 /// The time of each state row of `items`.
 fn state_times(items: &[list_states_response::Item]) -> Vec<i64> {
-    items
-        .iter()
-        .filter_map(|item| match item {
-            list_states_response::Item::Row(row) => Some(row.ts_ms),
-            _ => None,
-        })
-        .collect()
+    state_rows(items).map(|row| row.ts_ms).collect()
 }
 
 #[tokio::test]
 async fn states_answer_with_a_message_per_state() {
     let ms = before_now(SignedDuration::from_hours(1));
     let tree = minted_on(days_ago(0), 5);
-    let mut row = state_row(tree, 2, ms, None);
-    if let StateEntry::State { meta, payload, .. } = &mut row.entry {
+    let mut row = state_with_payload(tree, 2, ms, br#" {"amount": 10} "#);
+    if let StateEntry::State { meta, .. } = &mut row.entry {
         *meta = [("region".to_string(), "eu".to_string())].into();
-        *payload = br#" {"amount": 10} "#.to_vec();
     }
     let days = Days::new();
     put_states(&days, vec![row, state_row(tree, 2, ms + 1, Some(3))]).await;
@@ -484,10 +489,7 @@ async fn without_since_the_window_is_the_day_before_until() {
 #[tokio::test]
 async fn a_payload_that_is_not_json_comes_with_a_problem_before_its_state() {
     let ms = before_now(SignedDuration::from_hours(1));
-    let mut row = state_row(minted_on(days_ago(0), 5), 0, ms, None);
-    if let StateEntry::State { payload, .. } = &mut row.entry {
-        *payload = b"not json".to_vec();
-    }
+    let row = state_with_payload(minted_on(days_ago(0), 5), 0, ms, b"not json");
     let days = Days::new();
     put_states(&days, vec![row]).await;
 
@@ -529,6 +531,77 @@ async fn a_limit_ends_the_states_with_a_message_that_tells_they_were_cut() {
         matches!(items.last(), Some(list_states_response::Item::Truncated(_))),
         "{items:?}"
     );
+}
+
+#[tokio::test]
+async fn where_keeps_the_states_whose_payload_passes() {
+    let ms = before_now(SignedDuration::from_hours(1));
+    let tree = minted_on(days_ago(0), 5);
+    let with_amount =
+        |subflow, payload: &str| state_with_payload(tree, subflow, ms, payload.as_bytes());
+    let days = Days::new();
+    put_states(
+        &days,
+        vec![
+            with_amount(0, r#"{"amount": 50}"#),
+            with_amount(1, r#"{"amount": 150}"#),
+            with_amount(2, r#"{"amount": "150"}"#),
+            with_amount(3, r#"{"amount": 250.5}"#),
+        ],
+    )
+    .await;
+
+    let items = states(
+        &days,
+        ListStatesRequest {
+            r#where: Some(" amount > 100 ".into()),
+            ..states_request()
+        },
+    )
+    .await;
+
+    let subflows: Vec<u32> = state_rows(&items).map(|row| row.subflow).collect();
+    assert_eq!(subflows, [1, 3], "{items:?}");
+}
+
+#[tokio::test]
+async fn the_limit_counts_the_states_that_pass_where() {
+    let ms = before_now(SignedDuration::from_hours(1));
+    let tree = minted_on(days_ago(0), 5);
+    let days = Days::new();
+    put_states(
+        &days,
+        (0..4)
+            .map(|subflow| {
+                state_with_payload(
+                    tree,
+                    subflow,
+                    ms,
+                    format!(r#"{{"n": {subflow}}}"#).as_bytes(),
+                )
+            })
+            .collect(),
+    )
+    .await;
+
+    let items = states(
+        &days,
+        ListStatesRequest {
+            r#where: Some("n >= 2".into()),
+            limit: Some(1),
+            ..states_request()
+        },
+    )
+    .await;
+
+    let [
+        list_states_response::Item::Row(row),
+        list_states_response::Item::Truncated(_),
+    ] = items.as_slice()
+    else {
+        panic!("one row, then truncated: {items:?}");
+    };
+    assert_eq!(row.subflow, 2);
 }
 
 #[tokio::test]
@@ -576,10 +649,17 @@ async fn a_states_request_the_service_cannot_serve_is_refused() {
         ),
         (
             ListStatesRequest {
-                r#where: Some("amount > 100".into()),
+                r#where: Some("amount >".into()),
                 ..states_request()
             },
-            "where is not served yet",
+            "invalid where: expected a string, a number, `true`, `false` or `null` at column 9",
+        ),
+        (
+            ListStatesRequest {
+                r#where: Some("  amount >".into()),
+                ..states_request()
+            },
+            "at column 11",
         ),
         (
             ListStatesRequest {

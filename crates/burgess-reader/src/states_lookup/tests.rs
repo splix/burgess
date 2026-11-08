@@ -37,6 +37,7 @@ fn filter(since: Day, until: Day) -> StatesFilter {
         meta: BTreeMap::new(),
         since: noon(since),
         until: noon(until),
+        payload: None,
     }
 }
 

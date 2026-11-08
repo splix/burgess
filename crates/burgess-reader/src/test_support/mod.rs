@@ -52,6 +52,24 @@ pub(crate) fn state_row(tree: TreeId, subflow: u32, time: u64, child: Option<u32
     }
 }
 
+/// A state of `subflow` in `tree` at `time` in unix milliseconds, with
+/// `payload` as stored.
+pub(crate) fn state_with_payload(
+    tree: TreeId,
+    subflow: u32,
+    time: u64,
+    payload: &[u8],
+) -> StateRow {
+    let mut row = state_row(tree, subflow, time, None);
+    if let StateEntry::State {
+        payload: stored, ..
+    } = &mut row.entry
+    {
+        *stored = payload.to_vec();
+    }
+    row
+}
+
 /// The subflow of each row, in order.
 pub(crate) fn subflows(rows: &[StateRow]) -> Vec<u32> {
     rows.iter().map(|row| u32::from(row.subflow)).collect()

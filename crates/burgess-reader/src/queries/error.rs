@@ -7,6 +7,7 @@ use burgess_core::storage::DayError;
 use burgess_core::validation::ValidationError;
 use jiff::Timestamp;
 
+use crate::filter::FilterError;
 use crate::pages::LimitError;
 use crate::refs_lookup::UnboundedWalk;
 
@@ -68,11 +69,10 @@ pub enum RequestError {
     /// not ignore it, thus the caller does not think the rows are sorted.
     #[error("order is not served yet; do not set it to get the rows in the order they are read")]
     Order,
-    /// The service does not filter on the payload yet. It refuses the
-    /// filter and does not ignore it, thus the caller does not think that
-    /// the states pass it.
-    #[error("where is not served yet")]
-    Where,
+    /// The filter on the payload breaks the grammar. Refused, and not taken
+    /// as a filter that no state passes.
+    #[error("invalid where")]
+    Where(#[from] FilterError),
     /// No answer gives a cursor yet.
     #[error("cursors are not served yet")]
     Cursor,

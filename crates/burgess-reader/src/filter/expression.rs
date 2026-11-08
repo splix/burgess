@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 
 use serde_json::Number;
 
-use super::number::compare_numbers;
+use super::order::Orderable;
 
 /// A test on one value of the payload: `path cmp scalar`, or
 /// `path in scalar..scalar`.
@@ -104,13 +104,19 @@ impl RangeBounds {
     /// Whether no value can be in the range: its start is after its end, or
     /// at its end when the end is not in the range.
     pub(super) fn is_empty(&self, kind: RangeEnd) -> bool {
-        let order = match self {
-            RangeBounds::Numbers(start, end) => compare_numbers(start, end),
-            RangeBounds::Strings(start, end) => start.as_bytes().cmp(end.as_bytes()),
-        };
-        match kind {
-            RangeEnd::Exclusive => order != Ordering::Less,
-            RangeEnd::Inclusive => order == Ordering::Greater,
+        let (start, end) = self.orderable();
+        match (start.order(end), kind) {
+            (Some(order), RangeEnd::Exclusive) => order != Ordering::Less,
+            (Some(order), RangeEnd::Inclusive) => order == Ordering::Greater,
+            (None, _) => true,
+        }
+    }
+
+    /// The start and the end.
+    pub(super) fn orderable(&self) -> (Orderable<'_>, Orderable<'_>) {
+        match self {
+            RangeBounds::Numbers(start, end) => (Orderable::Number(start), Orderable::Number(end)),
+            RangeBounds::Strings(start, end) => (Orderable::String(start), Orderable::String(end)),
         }
     }
 }

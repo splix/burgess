@@ -2,24 +2,33 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{self, AtomicUsize};
 
-use arrow_array::{BooleanArray, MapArray, RecordBatch, StringArray, TimestampMillisecondArray};
+use arrow_array::{
+    Array, BinaryArray, BooleanArray, MapArray, RecordBatch, StringArray, TimestampMillisecondArray,
+};
 use arrow_schema::ArrowError;
 use burgess_core::storage::{EntryKind, StatesColumn};
+use burgess_core::wire::PayloadType;
 use jiff::Timestamp;
 use parquet::arrow::ProjectionMask;
-use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderMetadata, RowFilter};
+use parquet::arrow::arrow_reader::{
+    ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, RowFilter,
+};
+use serde_json::Value;
 
 use super::decode::{Meta, column};
 use super::error::StatesFileProblem;
+use crate::filter::Filter;
 
 /// The states to keep: of one service and category, in a time window, with
-/// some labels.
+/// some labels, and a payload that passes a filter.
 ///
 /// The `(tree, subflow, ts)` order of the file does not help to find them,
-/// thus a scan reads these columns of each row. The payload is read only
-/// for the rows that pass.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// thus a scan reads these columns of each row. The payload is read, and
+/// its filter applied, only for the rows that pass. The other columns are
+/// read only for the rows that pass both.
+#[derive(Debug, Clone, PartialEq)]
 pub struct StatesFilter {
     /// The service that captured the state, as stored.
     pub service: String,
@@ -31,24 +40,50 @@ pub struct StatesFilter {
     pub since: Timestamp,
     /// The latest time, by the producer clock.
     pub until: Timestamp,
+    /// A filter on the payload, if any.
+    pub payload: Option<Filter>,
 }
 
 impl StatesFilter {
     /// The filter as the decoder applies it to the rows of a file, whose
     /// columns are checked.
-    pub(super) fn row_filter(self: &Arc<Self>, metadata: &ArrowReaderMetadata) -> RowFilter {
+    ///
+    /// The payload filter is a second step, which the decoder runs only on
+    /// the rows that pass the first. Thus the decoder can stop at a limit of
+    /// rows that pass both, and a row that fails is never decoded in full.
+    /// `untested` counts the payloads that are not JSON, which pass no
+    /// payload filter.
+    pub(super) fn row_filter(
+        self: &Arc<Self>,
+        metadata: &ArrowReaderMetadata,
+        untested: &Arc<AtomicUsize>,
+    ) -> RowFilter {
+        let schema = metadata.parquet_schema();
         let columns = self.columns();
-        let mask = ProjectionMask::columns(
-            metadata.parquet_schema(),
-            columns.iter().map(|column| column.name()),
-        );
+        let mask = ProjectionMask::columns(schema, columns.iter().map(|column| column.name()));
         let filter = Arc::clone(self);
-        let predicate = ArrowPredicateFn::new(mask, move |batch: RecordBatch| {
-            filter
-                .passes(&batch)
-                .map_err(|problem| ArrowError::ExternalError(Box::new(problem)))
+        let columns = ArrowPredicateFn::new(mask, move |batch: RecordBatch| {
+            filter.passes(&batch).map_err(external)
         });
-        RowFilter::new(vec![Box::new(predicate)])
+        let mut predicates: Vec<Box<dyn ArrowPredicate>> = vec![Box::new(columns)];
+        if let Some(payload) = &self.payload {
+            let mask = ProjectionMask::columns(
+                schema,
+                [
+                    StatesColumn::PayloadType.name(),
+                    StatesColumn::Payload.name(),
+                ],
+            );
+            let payload = payload.clone();
+            let untested = Arc::clone(untested);
+            predicates.push(Box::new(ArrowPredicateFn::new(
+                mask,
+                move |batch: RecordBatch| {
+                    payloads_pass(&payload, &batch, &untested).map_err(external)
+                },
+            )));
+        }
+        RowFilter::new(predicates)
     }
 
     /// The columns that the filter reads. Without labels to match, the
@@ -130,4 +165,35 @@ impl<'a> FilterColumns<'a> {
             meta,
         })
     }
+}
+
+/// For each row of `batch`, whether its payload passes `filter`. A payload
+/// that is not JSON is counted in `untested`.
+fn payloads_pass(
+    filter: &Filter,
+    batch: &RecordBatch,
+    untested: &AtomicUsize,
+) -> Result<BooleanArray, StatesFileProblem> {
+    let payload_type: &StringArray = column(batch, StatesColumn::PayloadType)?;
+    let payload: &BinaryArray = column(batch, StatesColumn::Payload)?;
+    Ok((0..batch.num_rows())
+        .map(|row| {
+            let json = !payload_type.is_null(row)
+                && !payload.is_null(row)
+                && payload_type.value(row) == PayloadType::Json.name();
+            let value = json
+                .then(|| serde_json::from_slice::<Value>(payload.value(row)).ok())
+                .flatten();
+            let Some(value) = value else {
+                untested.fetch_add(1, atomic::Ordering::Relaxed);
+                return Some(false);
+            };
+            Some(filter.matches(&value))
+        })
+        .collect())
+}
+
+/// A problem as the decoder takes it from a predicate.
+fn external(problem: StatesFileProblem) -> ArrowError {
+    ArrowError::ExternalError(Box::new(problem))
 }
