@@ -65,10 +65,15 @@ pub enum RequestError {
     /// The limit is a number that the service does not serve.
     #[error(transparent)]
     Limit(#[from] LimitError),
-    /// The service does not sort rows yet. It refuses the order and does
-    /// not ignore it, thus the caller does not think the rows are sorted.
-    #[error("order is not served yet; do not set it to get the rows in the order they are read")]
+    /// The method does not sort its rows. It refuses the order and does not
+    /// ignore it, thus the caller does not think the rows are sorted.
+    #[error(
+        "only ListStates serves an order; do not set it to get the rows in the order they are read"
+    )]
     Order,
+    /// The order is not one that this service knows.
+    #[error("unknown order {0}")]
+    UnknownOrder(i32),
     /// The filter on the payload breaks the grammar. Refused, and not taken
     /// as a filter that no state passes.
     #[error("invalid where")]

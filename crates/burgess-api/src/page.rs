@@ -4,11 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::row::Row;
 
-/// The rows of one response, and what may be missing from them.
+/// The rows of one response, and what may be missing from them. The rows
+/// of trees and of states are [`Row`]s, and those of references are
+/// [`RefRow`](crate::RefRow)s.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Page {
-    /// The rows, in the order the lookup read them.
-    pub rows: Vec<Row>,
+pub struct Page<R = Row> {
+    /// The rows, in the order the lookup read them, or in the order asked
+    /// for.
+    pub rows: Vec<R>,
     /// Whether the lookup found more rows than the request's limit, so some
     /// were left out. There is no way yet to ask for the rest.
     pub truncated: bool,

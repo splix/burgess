@@ -125,7 +125,7 @@ fn a_row_without_a_child_subflow_has_none() {
 
 #[test]
 fn a_page_without_problems_leaves_them_out() {
-    let page = Page {
+    let page: Page = Page {
         rows: Vec::new(),
         truncated: true,
         problems: Vec::new(),
@@ -140,7 +140,7 @@ fn a_page_without_problems_leaves_them_out() {
 
 #[test]
 fn a_page_lists_its_problems() {
-    let page = Page {
+    let page: Page = Page {
         rows: Vec::new(),
         truncated: false,
         problems: vec!["the manifest of 20261105 is invalid".into()],

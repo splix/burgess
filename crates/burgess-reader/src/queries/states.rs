@@ -38,7 +38,7 @@ impl Queries {
             .filter(|text| !text.trim().is_empty())
             .map(str::parse::<Filter>)
             .transpose()?;
-        let page = PageOptions::from(&request).check(&self.limits)?;
+        let (page, order) = PageOptions::from(&request).check_ordered(&self.limits)?;
         let until = page.until.unwrap_or_else(now);
         let since = match request.since_ms {
             Some(since_ms) => time(TimeField::Since, since_ms)?,
@@ -62,7 +62,7 @@ impl Queries {
         // One row more than the page holds tells that the page is cut.
         let found = self
             .states
-            .states(filter, page.limit.saturating_add(1))
+            .states(filter, page.limit.saturating_add(1), order)
             .await;
         log_problems(&found.problems, lookup);
         Ok(found.into_responses(page.limit))

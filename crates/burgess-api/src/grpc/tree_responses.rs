@@ -1,10 +1,9 @@
-//! The messages of an answer of tree rows, and the page they make.
+//! The messages of an answer of tree rows.
 
-use burgess_core::report::error_chain;
-
+use super::answers::{AnswerMessage, PageItem};
 use super::{GetFlowResponse, GetTreeResponse, Problem, TreeRow, Truncated};
 use super::{get_flow_response, get_tree_response};
-use crate::{Page, Row};
+use crate::Row;
 
 /// What one message of an answer of tree rows holds.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,40 +19,12 @@ pub enum TreeItem {
 /// A message of an answer of tree rows. GetTree and GetFlow have different
 /// response types with the same content. This trait lets one function make
 /// and read the messages of the two.
-pub trait TreeResponse {
+pub trait TreeResponse: AnswerMessage<Row = Row> {
     /// The message that holds `item`.
     fn from_item(item: TreeItem) -> Self;
     /// The item of the message. `None` for a message kind that is newer
     /// than this version.
     fn into_item(self) -> Option<TreeItem>;
-}
-
-impl Page {
-    /// The page that the messages of an answer make, as REST sends it.
-    ///
-    /// A row that the page cannot hold, or a message of an unknown kind,
-    /// becomes a problem. The other rows are kept.
-    pub fn from_responses<R: TreeResponse>(responses: impl IntoIterator<Item = R>) -> Self {
-        let mut page = Page {
-            rows: Vec::new(),
-            truncated: false,
-            problems: Vec::new(),
-        };
-        for response in responses {
-            match response.into_item() {
-                Some(TreeItem::Row(row)) => match Row::try_from(row) {
-                    Ok(row) => page.rows.push(row),
-                    Err(error) => page.problems.push(error_chain(&error)),
-                },
-                Some(TreeItem::Problem(problem)) => page.problems.push(problem.message),
-                Some(TreeItem::Truncated) => page.truncated = true,
-                None => page
-                    .problems
-                    .push("a message of an unknown kind was skipped".to_string()),
-            }
-        }
-        page
-    }
 }
 
 /// GetTree and GetFlow responses hold the same items, under different
@@ -75,6 +46,18 @@ macro_rules! tree_response {
                     $item::Item::Row(row) => TreeItem::Row(row),
                     $item::Item::Problem(problem) => TreeItem::Problem(problem),
                     $item::Item::Truncated(_) => TreeItem::Truncated,
+                })
+            }
+        }
+
+        impl AnswerMessage for $response {
+            type Row = Row;
+
+            fn into_page_item(self) -> Option<PageItem<Row>> {
+                Some(match self.into_item()? {
+                    TreeItem::Row(row) => PageItem::Row(Row::try_from(row)),
+                    TreeItem::Problem(problem) => PageItem::Problem(problem.message),
+                    TreeItem::Truncated => PageItem::Truncated,
                 })
             }
         }

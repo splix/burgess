@@ -62,6 +62,7 @@ impl Fixture {
                 self.stats(),
                 &Arc::new(filter),
                 NonZeroUsize::MAX,
+                None,
             )
             .await
     }
@@ -79,6 +80,7 @@ impl Fixture {
                 self.stats(),
                 &Arc::new(filter),
                 NonZeroUsize::new(limit).unwrap(),
+                None,
             )
             .await
             .unwrap()

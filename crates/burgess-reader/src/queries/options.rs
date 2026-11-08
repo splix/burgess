@@ -10,6 +10,7 @@ use jiff::Timestamp;
 
 use super::error::{RequestError, TimeField};
 use super::non_empty;
+use crate::ordering::TsOrder;
 use crate::pages::PageLimits;
 
 /// The options of a lookup request, as given.
@@ -32,13 +33,22 @@ pub(super) struct PageRequest {
 }
 
 impl PageOptions<'_> {
-    /// The options, checked against what the service serves.
+    /// The options of a method without an order, checked against what the
+    /// service serves.
     pub(super) fn check(self, limits: &PageLimits) -> Result<PageRequest, RequestError> {
-        // Protobuf sends an enum as its number. Thus an unknown order comes
-        // as a number, and the service refuses it the same way.
-        if self.order != Order::Unspecified as i32 {
+        if self.order()?.is_some() {
             return Err(RequestError::Order);
         }
+        Ok(self.check_ordered(limits)?.0)
+    }
+
+    /// The options of a method that can order its rows by time, checked,
+    /// and the order asked for, if any.
+    pub(super) fn check_ordered(
+        self,
+        limits: &PageLimits,
+    ) -> Result<(PageRequest, Option<TsOrder>), RequestError> {
+        let order = self.order()?;
         if non_empty(self.cursor).is_some() {
             return Err(RequestError::Cursor);
         }
@@ -50,10 +60,26 @@ impl PageOptions<'_> {
         let limit = self
             .limit
             .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX));
-        Ok(PageRequest {
+        let page = PageRequest {
             until,
             limit: limits.limit(limit)?,
-        })
+        };
+        Ok((page, order))
+    }
+}
+
+impl PageOptions<'_> {
+    /// The order asked for. Checked first, thus an order is refused for
+    /// itself, whatever the other options are.
+    fn order(&self) -> Result<Option<TsOrder>, RequestError> {
+        // Protobuf sends an enum as its number, thus an order that is newer
+        // than this service comes as a number that it does not know.
+        match Order::try_from(self.order) {
+            Ok(Order::Unspecified) => Ok(None),
+            Ok(Order::TsAscending) => Ok(Some(TsOrder::Ascending)),
+            Ok(Order::TsDescending) => Ok(Some(TsOrder::Descending)),
+            Err(_) => Err(RequestError::UnknownOrder(self.order)),
+        }
     }
 }
 

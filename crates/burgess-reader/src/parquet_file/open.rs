@@ -67,20 +67,22 @@ impl OpenFile {
         Ok(Some(batches))
     }
 
-    /// The batches of the first `limit` rows that pass `filter`, from all
-    /// row groups.
+    /// The batches of the rows that pass `filter`, from all row groups, up
+    /// to `limit` rows if one is given.
     ///
     /// The decoder reads the columns of the filter first, and the other
     /// columns only for the pages that hold a row that passes.
     pub(crate) fn filter(
         self,
         filter: RowFilter,
-        limit: NonZeroUsize,
+        limit: Option<NonZeroUsize>,
     ) -> Result<Batches, FileProblem> {
-        let batches = ParquetRecordBatchStreamBuilder::new_with_metadata(self.input, self.metadata)
-            .with_row_filter(filter)
-            .with_limit(limit.get())
-            .build()?;
-        Ok(batches)
+        let mut builder =
+            ParquetRecordBatchStreamBuilder::new_with_metadata(self.input, self.metadata)
+                .with_row_filter(filter);
+        if let Some(limit) = limit {
+            builder = builder.with_limit(limit.get());
+        }
+        Ok(builder.build()?)
     }
 }

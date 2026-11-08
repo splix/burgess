@@ -12,11 +12,13 @@ pub mod grpc;
 mod error;
 mod ids;
 mod page;
+mod ref_row;
 mod row;
 mod time;
 
 pub use error::ErrorBody;
 pub use page::Page;
+pub use ref_row::RefRow;
 pub use row::{PayloadType, Row, RowKind};
 pub use time::{TimeParseError, parse_time};
 

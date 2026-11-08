@@ -312,34 +312,41 @@ async fn a_limit_the_service_does_not_serve_is_refused() {
 }
 
 #[tokio::test]
-async fn an_order_or_a_cursor_is_refused_until_served() {
+async fn an_order_or_a_cursor_is_refused_for_a_tree() {
     let (days, tree) = one_tree().await;
     let options = [
-        (Order::TsAscending as i32, None),
-        (42, None),
-        (Order::Unspecified as i32, Some("AAAA".to_string())),
+        (
+            Order::TsAscending as i32,
+            None,
+            "only ListStates serves an order",
+        ),
+        (42, None, "unknown order 42"),
+        (
+            Order::Unspecified as i32,
+            Some("AAAA".to_string()),
+            "cursors are not served yet",
+        ),
+        (
+            Order::TsAscending as i32,
+            Some("AAAA".to_string()),
+            "only ListStates serves an order",
+        ),
     ];
-    for (order, cursor) in options {
+    for (order, cursor, expected) in options {
         let request = GetTreeRequest {
             order,
             cursor: cursor.clone(),
             ..tree_request(tree)
         };
         let error = refused(api(&days).get_tree(Request::new(request)).await);
-        assert!(
-            error.contains("not served yet"),
-            "{order} {cursor:?}: {error}"
-        );
+        assert!(error.contains(expected), "{order} {cursor:?}: {error}");
         let request = GetFlowRequest {
             order,
             cursor: cursor.clone(),
             ..flow_request(tree, 0)
         };
         let error = refused(api(&days).get_flow(Request::new(request)).await);
-        assert!(
-            error.contains("not served yet"),
-            "{order} {cursor:?}: {error}"
-        );
+        assert!(error.contains(expected), "{order} {cursor:?}: {error}");
     }
 }
 
@@ -678,10 +685,10 @@ async fn a_states_request_the_service_cannot_serve_is_refused() {
         ),
         (
             ListStatesRequest {
-                order: Order::TsAscending as i32,
+                order: 42,
                 ..states_request()
             },
-            "order is not served yet",
+            "unknown order 42",
         ),
         (
             ListStatesRequest {
@@ -895,7 +902,7 @@ async fn a_references_request_the_service_cannot_serve_is_refused() {
                 order: Order::TsDescending as i32,
                 ..refs_request("ORD-1")
             },
-            "not served yet",
+            "only ListStates serves an order",
         ),
         (
             ListRefsRequest {

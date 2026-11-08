@@ -246,9 +246,10 @@ async fn a_method_other_than_get_answers_405_with_an_error_body() {
     let response = router_over(&days).oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert!(response.headers().contains_key(axum::http::header::ALLOW));
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let error: ErrorBody = serde_json::from_slice(&body).unwrap();
-    assert_eq!(error.error, "the route serves only GET");
+    assert_eq!(error.error, "the route does not serve this method");
 }
 
 #[tokio::test]
@@ -401,3 +402,5 @@ async fn both_routes_check_the_id_before_the_options() {
         assert!(error.starts_with("invalid id"), "{route}: {error}");
     }
 }
+
+mod lists;

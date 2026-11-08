@@ -34,7 +34,8 @@ message GetTreeRequest {
   // The maximum number of rows. The service has a default and a maximum.
   // It refuses a limit over the maximum, it does not decrease it.
   optional uint32 limit = 3;
-  // The order of the rows. Only ORDER_UNSPECIFIED is served at this time.
+  // The order of the rows. Only ListStates serves an order; other values
+  // than ORDER_UNSPECIFIED are refused.
   Order order = 4;
   // The position to continue from. Not served at this time.
   optional string cursor = 5;
@@ -79,8 +80,10 @@ message ListStatesRequest {
   optional int64 until_ms = 6;
   // Same as in GetTreeRequest.
   optional uint32 limit = 7;
-  // The order of the rows: by state time, or as read. Only
-  // ORDER_UNSPECIFIED is served at this time.
+  // The order of the rows: by state time, or as read. In an order, the
+  // lookup reads each file of the window that can hold a state before the
+  // last state of the page, thus it is slower than without one. States of
+  // the same time come in the same order on each request.
   Order order = 8;
   // Same as in GetTreeRequest.
   optional string cursor = 9;

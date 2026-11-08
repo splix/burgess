@@ -3,8 +3,7 @@
 //! The two transports answer through here. gRPC sends the messages as they
 //! are. REST reads its request into the same request message and makes its
 //! JSON page from the same messages. Thus the two transports give the same
-//! rows, limits, problems and errors. REST has no route for ListRefs and
-//! ListStates yet, thus they are served over gRPC only.
+//! rows, limits, problems and errors.
 
 mod error;
 mod options;

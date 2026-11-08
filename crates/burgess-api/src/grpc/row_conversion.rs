@@ -1,15 +1,15 @@
-//! A tree row from protobuf to the JSON form.
+//! The rows of protobuf in the JSON form.
 
 use burgess_core::flow::{FlowId, IdParseError, Subflow, TreeId};
 use jiff::Timestamp;
 use serde_json::value::RawValue;
 
 use super::tree_row::Entry;
-use super::{PayloadType, TreeRow};
-use crate::{Row, RowKind};
+use super::{PayloadType, StateRow, TreeRow};
+use crate::{RefRow, Row, RowKind};
 
-/// Why a protobuf row cannot change to a [`Row`]. The service sends only
-/// rows that change correctly. Other versions of the service, or a
+/// Why a protobuf row cannot change to its JSON form, a [`Row`] or a
+/// [`RefRow`]. The service sends only rows that change correctly. Other versions of the service, or a
 /// different program at its address, can send other rows.
 #[derive(Debug, thiserror::Error)]
 pub enum RowConversionError {
@@ -43,13 +43,24 @@ pub enum RowConversionError {
     },
 }
 
-impl TryFrom<TreeRow> for Row {
-    type Error = RowConversionError;
+/// The flow and the time of a row, checked.
+struct Place {
+    flow_id: FlowId,
+    tree: TreeId,
+    subflow: Subflow,
+    ts: Timestamp,
+}
 
-    fn try_from(row: TreeRow) -> Result<Self, Self::Error> {
-        let flow_id: FlowId = row.flow_id.parse()?;
-        let tree: TreeId = row.tree.parse()?;
-        let subflow = Subflow::from(row.subflow);
+impl Place {
+    fn new(
+        flow_id: &str,
+        tree: &str,
+        subflow: u32,
+        ts_ms: i64,
+    ) -> Result<Self, RowConversionError> {
+        let flow_id: FlowId = flow_id.parse()?;
+        let tree: TreeId = tree.parse()?;
+        let subflow = Subflow::from(subflow);
         if flow_id != FlowId::new(tree, subflow) {
             return Err(RowConversionError::IdsDisagree {
                 flow_id,
@@ -57,8 +68,27 @@ impl TryFrom<TreeRow> for Row {
                 subflow,
             });
         }
-        let ts = Timestamp::from_millisecond(row.ts_ms)
-            .map_err(|_| RowConversionError::Time { ts_ms: row.ts_ms })?;
+        let ts =
+            Timestamp::from_millisecond(ts_ms).map_err(|_| RowConversionError::Time { ts_ms })?;
+        Ok(Place {
+            flow_id,
+            tree,
+            subflow,
+            ts,
+        })
+    }
+}
+
+impl TryFrom<TreeRow> for Row {
+    type Error = RowConversionError;
+
+    fn try_from(row: TreeRow) -> Result<Self, Self::Error> {
+        let Place {
+            flow_id,
+            tree,
+            subflow,
+            ts,
+        } = Place::new(&row.flow_id, &row.tree, row.subflow, row.ts_ms)?;
         let mut converted = Row {
             flow_id,
             tree,
@@ -76,11 +106,7 @@ impl TryFrom<TreeRow> for Row {
             Some(Entry::State(state)) => {
                 converted.kind = RowKind::State;
                 converted.payload_type = api_payload_type(state.payload_type);
-                converted.payload = state
-                    .payload
-                    .map(RawValue::from_string)
-                    .transpose()
-                    .map_err(|source| RowConversionError::Payload { flow_id, source })?;
+                converted.payload = json(state.payload, flow_id)?;
                 converted.meta = state.meta;
             }
             Some(Entry::Split(split)) => {
@@ -91,6 +117,68 @@ impl TryFrom<TreeRow> for Row {
         }
         Ok(converted)
     }
+}
+
+/// A state of ListStates is a row of the state kind, as a tree lookup
+/// gives it, thus a client shows states of both in the same way.
+impl TryFrom<StateRow> for Row {
+    type Error = RowConversionError;
+
+    fn try_from(row: StateRow) -> Result<Self, Self::Error> {
+        let Place {
+            flow_id,
+            tree,
+            subflow,
+            ts,
+        } = Place::new(&row.flow_id, &row.tree, row.subflow, row.ts_ms)?;
+        Ok(Row {
+            flow_id,
+            tree,
+            subflow,
+            ts,
+            kind: RowKind::State,
+            service: row.service,
+            category: row.category,
+            meta: row.meta,
+            payload_type: api_payload_type(row.payload_type),
+            payload: json(row.payload, flow_id)?,
+            child_subflow: None,
+        })
+    }
+}
+
+impl TryFrom<super::RefRow> for RefRow {
+    type Error = RowConversionError;
+
+    fn try_from(row: super::RefRow) -> Result<Self, Self::Error> {
+        let Place {
+            flow_id,
+            tree,
+            subflow,
+            ts,
+        } = Place::new(&row.flow_id, &row.tree, row.subflow, row.ts_ms)?;
+        Ok(RefRow {
+            ref_type: row.ref_type,
+            domain_id: row.domain_id,
+            service: row.service,
+            category: row.category,
+            flow_id,
+            tree,
+            subflow,
+            ts,
+        })
+    }
+}
+
+/// The payload as the JSON it is.
+fn json(
+    payload: Option<String>,
+    flow_id: FlowId,
+) -> Result<Option<Box<RawValue>>, RowConversionError> {
+    payload
+        .map(RawValue::from_string)
+        .transpose()
+        .map_err(|source| RowConversionError::Payload { flow_id, source })
 }
 
 /// Protobuf sends an enum as its number. A type that is newer than this

@@ -6,9 +6,11 @@
 //! answer one time for the two transports, and a gRPC client can show rows
 //! as REST shows them.
 
+mod answers;
 mod row_conversion;
 mod tree_responses;
 
+pub use answers::{AnswerMessage, PageItem};
 pub use row_conversion::RowConversionError;
 pub use tree_responses::{TreeItem, TreeResponse};
 

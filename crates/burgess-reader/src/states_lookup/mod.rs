@@ -14,6 +14,7 @@
 
 mod error;
 mod lookup;
+mod ordered;
 
 pub use error::StatesLookupError;
 pub use lookup::StatesLookup;

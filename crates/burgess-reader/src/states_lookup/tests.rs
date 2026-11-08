@@ -13,6 +13,7 @@ use object_store::ObjectStoreExt;
 use super::*;
 use crate::day_scan::ScanConfig;
 use crate::manifests::{ManifestCache, ManifestCacheConfig};
+use crate::ordering::TsOrder;
 use crate::states_file::StatesFilter;
 use crate::test_support::{Days, around, at, days_ago, minted_on, noon, state_row};
 
@@ -47,7 +48,7 @@ fn wanted(rows: usize) -> NonZeroUsize {
 
 async fn states(days: &Days, filter: StatesFilter) -> FoundStates {
     days.states_lookup(ScanConfig::default())
-        .states(filter, wanted(100))
+        .states(filter, wanted(100), None)
         .await
 }
 
@@ -175,11 +176,11 @@ async fn days_before_find_a_state_stored_the_day_before_its_time() {
 
     let without = days
         .states_lookup(with_days_before(0))
-        .states(filter(day, day), wanted(100))
+        .states(filter(day, day), wanted(100), None)
         .await;
     let with = days
         .states_lookup(with_days_before(1))
-        .states(filter(day, day), wanted(100))
+        .states(filter(day, day), wanted(100), None)
         .await;
 
     assert_eq!(offsets(&without, day), [] as [i64; 0]);
@@ -276,7 +277,7 @@ async fn the_walk_stops_when_it_has_the_states_wanted() {
             concurrent_files: wanted(1),
             ..ScanConfig::default()
         })
-        .states(filter(old, days_ago(0)), wanted(1))
+        .states(filter(old, days_ago(0)), wanted(1), None)
         .await;
 
     assert_eq!(found.rows.len(), 1);
@@ -348,4 +349,172 @@ async fn a_states_file_that_is_gone_is_reported_and_the_walk_goes_on() {
         panic!("one file problem expected: {:?}", found.problems);
     };
     assert_eq!(problem.file(), &gone);
+}
+
+/// The lookup of `filter` in `order`, keeping `wanted` states.
+async fn ordered(days: &Days, filter: StatesFilter, wanted: usize, order: TsOrder) -> FoundStates {
+    days.states_lookup(ScanConfig {
+        concurrent_files: NonZeroUsize::MIN,
+        ..ScanConfig::default()
+    })
+    .states(filter, self::wanted(wanted), Some(order))
+    .await
+}
+
+/// Two days of three flushes, whose times interleave: one state of the
+/// first day is stored on the second day.
+async fn interleaved() -> (Days, Day, Day) {
+    let (first, second) = (days_ago(3), days_ago(2));
+    let tree = minted_on(first, 1);
+    let days = Days::new();
+    days.put(
+        first,
+        &[
+            &[state(tree, first, 30, &[]), state(tree, first, 10, &[])],
+            &[state(tree, first, 20, &[]), state(tree, first, 50, &[])],
+        ],
+    )
+    .await;
+    days.put(
+        second,
+        &[&[state(tree, first, 25, &[]), state(tree, second, 0, &[])]],
+    )
+    .await;
+    (days, first, second)
+}
+
+#[tokio::test]
+async fn an_order_sorts_the_states_of_all_files_by_time() {
+    let (days, first, second) = interleaved().await;
+    let after_noon = (at(second, 0) - at(first, 0)) as i64;
+
+    let ascending = ordered(&days, filter(first, second), 100, TsOrder::Ascending).await;
+    let descending = ordered(&days, filter(first, second), 100, TsOrder::Descending).await;
+
+    assert_eq!(offsets(&ascending, first), [10, 20, 25, 30, 50, after_noon]);
+    assert_eq!(
+        offsets(&descending, first),
+        [after_noon, 50, 30, 25, 20, 10]
+    );
+    assert!(ascending.problems.is_empty(), "{:?}", ascending.problems);
+}
+
+#[tokio::test]
+async fn an_order_keeps_only_the_first_states_wanted() {
+    let (days, first, second) = interleaved().await;
+
+    let ascending = ordered(&days, filter(first, second), 3, TsOrder::Ascending).await;
+    let descending = ordered(&days, filter(first, second), 2, TsOrder::Descending).await;
+
+    assert_eq!(offsets(&ascending, first), [10, 20, 25]);
+    assert_eq!(
+        offsets(&descending, second),
+        [0, 50 - (at(second, 0) - at(first, 0)) as i64]
+    );
+}
+
+#[tokio::test]
+async fn an_ordered_lookup_does_not_open_a_file_that_cannot_improve_the_page() {
+    let day = days_ago(2);
+    let tree = minted_on(day, 1);
+    let days = Days::new();
+    days.put(
+        day,
+        &[
+            &[
+                state(tree, day, 0, &[]),
+                state(tree, day, 1, &[]),
+                state(tree, day, 2, &[]),
+            ],
+            &[state(tree, day, 100, &[])],
+            &[state(tree, day, 200, &[])],
+        ],
+    )
+    .await;
+
+    let found = ordered(&days, filter(day, days_ago(1)), 2, TsOrder::Ascending).await;
+
+    assert_eq!(offsets(&found, day), [0, 1]);
+    let opened: Vec<String> = days
+        .requests_on(day)
+        .into_iter()
+        .filter(|path| path.ends_with("-states.parquet"))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let first = ObjectName::StatesFile {
+        day,
+        nnnn: UnixMillis::from(at(day, 0)),
+    };
+    assert_eq!(opened, [first.to_string()]);
+}
+
+#[tokio::test]
+async fn states_of_the_same_time_keep_one_order() {
+    let day = days_ago(2);
+    let days = Days::new();
+    days.put(
+        day,
+        &[
+            &[
+                state(minted_on(day, 1), day, 5, &[]),
+                state(minted_on(day, 2), day, 5, &[]),
+            ],
+            &[state(minted_on(day, 3), day, 5, &[])],
+        ],
+    )
+    .await;
+    let trees = |found: &FoundStates| found.rows.iter().map(|row| row.tree).collect::<Vec<_>>();
+
+    let first = ordered(&days, filter(day, days_ago(1)), 100, TsOrder::Ascending).await;
+    let again = ordered(&days, filter(day, days_ago(1)), 100, TsOrder::Ascending).await;
+
+    assert_eq!(
+        trees(&first),
+        [minted_on(day, 1), minted_on(day, 2), minted_on(day, 3)],
+        "the older flush first, then file order"
+    );
+    assert_eq!(trees(&first), trees(&again));
+}
+
+#[tokio::test]
+async fn states_of_the_same_time_keep_one_order_when_files_are_read_together() {
+    let day = days_ago(2);
+    let days = Days::new();
+    let flushes: Vec<Vec<StateRow>> = (0..4)
+        .map(|flush| {
+            (0..3)
+                .map(|tree| state(minted_on(day, flush * 10 + tree), day, 5, &[]))
+                .collect()
+        })
+        .collect();
+    let flushes: Vec<&[StateRow]> = flushes.iter().map(Vec::as_slice).collect();
+    days.put(day, &flushes).await;
+    let lookup = days.states_lookup(ScanConfig::default());
+    let trees = |found: FoundStates| {
+        found
+            .rows
+            .into_iter()
+            .map(|row| row.tree)
+            .collect::<Vec<_>>()
+    };
+
+    let mut answers = Vec::new();
+    for _ in 0..5 {
+        let found = lookup
+            .states(
+                filter(day, days_ago(1)),
+                wanted(5),
+                Some(TsOrder::Ascending),
+            )
+            .await;
+        answers.push(trees(found));
+    }
+
+    let expected: Vec<TreeId> = [0, 1, 2, 10, 11]
+        .map(|random| minted_on(day, random))
+        .into();
+    for answer in answers {
+        assert_eq!(answer, expected, "the oldest flush first, then file order");
+    }
 }

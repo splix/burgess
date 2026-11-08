@@ -241,3 +241,90 @@ fn tree_and_flow_messages_hold_the_same_items() {
         assert_eq!((tree.as_ref(), flow.as_ref()), (Some(&item), Some(&item)));
     }
 }
+
+fn state_row() -> StateRow {
+    StateRow {
+        flow_id: FlowId::new(tree(), Subflow::from(7)).to_string(),
+        tree: TREE.into(),
+        subflow: 7,
+        ts_ms: 1_793_000_000_123,
+        service: "checkout".into(),
+        category: "order".into(),
+        meta: BTreeMap::from([("region".to_string(), "eu".to_string())]),
+        payload_type: PayloadType::Json as i32,
+        payload: Some(r#"{"amount":42}"#.into()),
+    }
+}
+
+#[test]
+fn a_state_of_list_states_reads_as_the_state_of_a_tree() {
+    let from_states = Row::try_from(state_row()).unwrap();
+
+    assert_eq!(json(&from_states), json(&row(state())));
+}
+
+#[test]
+fn state_messages_make_a_page_of_rows() {
+    let messages = vec![
+        ListStatesResponse {
+            item: Some(list_states_response::Item::Problem(Problem {
+                message: "a file is gone".into(),
+            })),
+        },
+        ListStatesResponse {
+            item: Some(list_states_response::Item::Row(state_row())),
+        },
+        ListStatesResponse {
+            item: Some(list_states_response::Item::Row(StateRow {
+                tree: "zz".into(),
+                ..state_row()
+            })),
+        },
+        ListStatesResponse {
+            item: Some(list_states_response::Item::Truncated(Truncated {})),
+        },
+    ];
+
+    let page = Page::from_responses(messages);
+
+    assert_eq!(page.rows.len(), 1);
+    assert!(page.truncated);
+    assert_eq!(page.problems.len(), 2, "{:?}", page.problems);
+    assert_eq!(page.problems[0], "a file is gone");
+}
+
+#[test]
+fn a_reference_reads_as_rest_sends_it() {
+    let message = super::RefRow {
+        ref_type: "order_id".into(),
+        domain_id: "ORD-1".into(),
+        service: "checkout".into(),
+        category: None,
+        flow_id: FlowId::new(tree(), Subflow::from(7)).to_string(),
+        tree: TREE.into(),
+        subflow: 7,
+        ts_ms: 1_793_000_000_123,
+    };
+    let messages = [ListRefsResponse {
+        item: Some(list_refs_response::Item::Row(message)),
+    }];
+
+    let page = Page::from_responses(messages);
+
+    assert_eq!(
+        serde_json::to_value(&page).unwrap(),
+        json!({
+            "rows": [{
+                "ref_type": "order_id",
+                "domain_id": "ORD-1",
+                "service": "checkout",
+                "category": null,
+                "flow_id": FlowId::new(tree(), Subflow::from(7)).to_string(),
+                "tree": TREE,
+                "subflow": 7,
+                "ts": 1_793_000_000_123_i64,
+            }],
+            "truncated": false,
+        })
+    );
+}

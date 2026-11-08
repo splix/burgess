@@ -40,8 +40,29 @@ fn settings(store: &Path) -> Settings {
 /// Sends a GET for `path` and returns the status code and the body, read
 /// as JSON.
 async fn get<T: DeserializeOwned>(addr: SocketAddr, path: &str) -> (u16, T) {
+    send(
+        addr,
+        format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"),
+    )
+    .await
+}
+
+/// Sends a POST of `body` as JSON to `path`, and returns the status code and
+/// the body of the response, read as JSON.
+async fn post<T: DeserializeOwned>(addr: SocketAddr, path: &str, body: &str) -> (u16, T) {
+    let length = body.len();
+    send(
+        addr,
+        format!(
+            "POST {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\
+             Content-Type: application/json\r\nContent-Length: {length}\r\n\r\n{body}"
+        ),
+    )
+    .await
+}
+
+async fn send<T: DeserializeOwned>(addr: SocketAddr, request: String) -> (u16, T) {
     let mut stream = TcpStream::connect(addr).await.unwrap();
-    let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).await.unwrap();
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
@@ -110,6 +131,19 @@ async fn answers_lookups_over_files_in_a_local_directory() {
         .expect("ListStates on the same port");
     let states: Vec<_> = states.into_inner().try_collect().await.unwrap();
     assert_eq!(states.len(), 2, "two states, no split: {states:?}");
+    let body = format!(
+        r#"{{"service": "checkout", "category": "step", "since": {}, "until": {}, "order": "desc"}}"#,
+        at(day, 0),
+        at(day, 2)
+    );
+    let (status, page) = post::<Page>(addr, "/v1/states", &body).await;
+    assert_eq!(status, 200);
+    let times: Vec<i64> = page
+        .rows
+        .iter()
+        .map(|row| row.ts.as_millisecond())
+        .collect();
+    assert_eq!(times, [at(day, 2) as i64, at(day, 0) as i64]);
 
     stop.send(true).unwrap();
     running.await.unwrap().expect("the service stops cleanly");
