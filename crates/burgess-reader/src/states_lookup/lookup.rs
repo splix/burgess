@@ -8,7 +8,7 @@ use burgess_core::storage::{Day, FileStats, ObjectName};
 use super::FoundStates;
 use super::scan::StatesScan;
 use crate::cursor::RowPosition;
-use crate::day_scan::{DayScan, ScanConfig, days_back, newest_day, oldest_day};
+use crate::day_scan::{DayGate, DayScan, ScanConfig, days_back, newest_day, oldest_day};
 use crate::manifests::{FlushGroup, ManifestCache};
 use crate::states_file::{ScanOrder, StatesFileReader, StatesFilter};
 
@@ -67,7 +67,9 @@ impl StatesLookup {
             manifests: &self.manifests,
             config: self.config,
         };
-        let pick = |group: &FlushGroup| {
+        // States have no filter of their own: each day is read.
+        let gate = |_| std::future::ready(DayGate::Read(()));
+        let pick = |group: &FlushGroup, _: &()| {
             group
                 .may_hold_times(filter.since, filter.until)
                 .then(|| (group.states_file(), group.states()))
@@ -83,7 +85,7 @@ impl StatesLookup {
                 Ok(states)
             }
         };
-        scan.scan(days, from, pick, read, wanted).await
+        scan.scan(days, from, gate, pick, read, wanted).await
     }
 
     /// The days to visit, newest first. No day when a time of the window or

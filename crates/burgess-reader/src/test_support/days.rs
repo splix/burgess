@@ -8,6 +8,7 @@ use burgess_core::storage::{
 };
 use burgess_core::wire::UnixMillis;
 use burgess_writer::batch::SortedBatch;
+use burgess_writer::flush::{BloomConfig, Clock, Flusher};
 use burgess_writer::parquet_files::{FileWriter, ParquetConfig};
 use jiff::Timestamp;
 use jiff::civil::Date;
@@ -15,6 +16,7 @@ use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt};
 
 use super::RecordingStore;
+use crate::blooms::BloomReader;
 use crate::day_scan::ScanConfig;
 use crate::manifests::{ManifestCache, ManifestCacheConfig};
 use crate::pages::PageLimits;
@@ -45,6 +47,15 @@ pub(crate) fn minted_on(day: Day, random: u8) -> TreeId {
 /// `offset` milliseconds past noon of `day`, in unix milliseconds.
 pub(crate) fn at(day: Day, offset: u64) -> u64 {
     noon(day).as_millisecond() as u64 + offset
+}
+
+/// A clock that reads one time.
+struct At(Timestamp);
+
+impl Clock for At {
+    fn now(&self) -> Timestamp {
+        self.0
+    }
 }
 
 /// The rows of one flush, in the order its states file stores them.
@@ -98,7 +109,7 @@ impl Days {
     pub(crate) fn lookup(&self, config: TreeLookupConfig) -> TreeLookup {
         let manifests = ManifestCache::new(self.store.clone(), ManifestCacheConfig::default());
         let files = StatesFileReader::new(self.store.clone(), FileReadConfig::default());
-        TreeLookup::new(Arc::new(manifests), files, config)
+        TreeLookup::new(Arc::new(manifests), self.blooms(), files, config)
     }
 
     /// A refs lookup over the stored days, with default settings for the
@@ -106,7 +117,7 @@ impl Days {
     pub(crate) fn refs_lookup(&self, config: ScanConfig) -> RefsLookup {
         let manifests = ManifestCache::new(self.store.clone(), ManifestCacheConfig::default());
         let files = RefsFileReader::new(self.store.clone(), FileReadConfig::default());
-        RefsLookup::new(Arc::new(manifests), files, config)
+        RefsLookup::new(Arc::new(manifests), self.blooms(), files, config)
     }
 
     /// A states lookup over the stored days, with default settings for the
@@ -130,12 +141,74 @@ impl Days {
         let states = || StatesFileReader::new(self.store.clone(), FileReadConfig::default());
         let refs = RefsFileReader::new(self.store.clone(), FileReadConfig::default());
         Queries {
-            lookup: TreeLookup::new(manifests.clone(), states(), TreeLookupConfig::default()),
-            refs: RefsLookup::new(manifests.clone(), refs, ScanConfig::default()),
+            lookup: TreeLookup::new(
+                manifests.clone(),
+                self.blooms(),
+                states(),
+                TreeLookupConfig::default(),
+            ),
+            refs: RefsLookup::new(
+                manifests.clone(),
+                self.blooms(),
+                refs,
+                ScanConfig::default(),
+            ),
             states: StatesLookup::new(manifests.clone(), states(), ScanConfig::default()),
             manifests,
             limits: PageLimits::default(),
         }
+    }
+
+    /// Stores `states` and `refs` as the writer flushes them at `time`,
+    /// with the bloom filters of the day, and gives the flush time. The
+    /// filters come from the writer itself, thus a key that the reader
+    /// makes otherwise is not found.
+    ///
+    /// The writer reads the store too, which is not recorded. Flushes go
+    /// oldest first, as a writer makes them.
+    pub(crate) async fn flush_at(
+        &self,
+        time: Timestamp,
+        mut states: Vec<StateRow>,
+        mut refs: Vec<RefRow>,
+    ) -> UnixMillis {
+        states.sort_by_key(StateRow::sort_key);
+        refs.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+        let mut flusher = Flusher::open(
+            Arc::new(self.store.inner.clone()),
+            FileWriter::new(ParquetConfig::default()).unwrap(),
+            At(time),
+            "writer-1".parse().unwrap(),
+            BloomConfig::default(),
+        )
+        .await
+        .unwrap();
+        let batch = SortedBatch {
+            states,
+            refs,
+            ..SortedBatch::default()
+        };
+        flusher.flush(Arc::new(batch)).await.unwrap().nnnn
+    }
+
+    /// Deletes the bloom filters of `day`, as a day the writer stored
+    /// without them.
+    pub(crate) async fn delete_blooms(&self, day: Day) {
+        for name in [
+            ObjectName::RefsBloom { day },
+            ObjectName::TreesBloom { day },
+        ] {
+            let path = Path::from(name.to_string());
+            match self.store.inner.delete(&path).await {
+                Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+                Err(error) => panic!("deleting {path}: {error}"),
+            }
+        }
+    }
+
+    /// A reader of the filters of the stored days.
+    pub(crate) fn blooms(&self) -> BloomReader {
+        BloomReader::new(self.store.clone())
     }
 
     /// The days whose manifest was requested, in request order.

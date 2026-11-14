@@ -9,11 +9,13 @@
 
 mod config;
 mod days;
+mod gate;
 mod problems;
 mod scan;
 
 pub use config::ScanConfig;
 pub(crate) use days::{days_back, newest_day, oldest_day};
+pub(crate) use gate::DayGate;
 pub(crate) use problems::WalkProblems;
 pub(crate) use scan::DayScan;
 pub use scan::Found;

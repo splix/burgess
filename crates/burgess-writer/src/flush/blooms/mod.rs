@@ -1,9 +1,9 @@
 //! The bloom filters of the day that a flush goes to.
 //!
 //! Each flush writes the filters of its day, with its keys added, after its
-//! data files and before the manifest. Thus a filter holds the keys of each
-//! file that a manifest read before it lists, and a lookup that reads the
-//! manifest first and then the filter misses no row of a listed file.
+//! data files and before the manifest. Thus a filter, whenever it is read,
+//! holds the keys of each file listed by then, and a lookup that reads it
+//! misses no row of a file listed before it read the filter.
 //!
 //! A filter is never made again from the data files. A day that has listed
 //! flushes keeps its stored filters, with the keys of the new flushes added.
@@ -51,7 +51,7 @@ struct Kept<K> {
     changed: bool,
 }
 
-impl<K: StoredKey> Kept<K> {
+impl<K: BloomKey> Kept<K> {
     fn new(filter: DayBloom<K>) -> Self {
         Kept {
             filter,
@@ -82,7 +82,7 @@ impl<K: StoredKey> Kept<K> {
         if !was_over && self.filter.insertions() > capacity {
             tracing::warn!(
                 day = %self.filter.day(),
-                filter = K::FILTER,
+                filter = K::KIND,
                 capacity,
                 "the bloom filter holds more keys than it was sized for; lookups read more files"
             );
@@ -131,31 +131,6 @@ impl DayBlooms {
             trees.changed = false;
         }
         self
-    }
-}
-
-/// A key of a filter that the writer stores.
-trait StoredKey: BloomKey {
-    /// What the log calls the filter.
-    const FILTER: &'static str;
-
-    /// The name of the filter of `day`.
-    fn object(day: Day) -> ObjectName;
-}
-
-impl StoredKey for RefsKey {
-    const FILTER: &'static str = "refs";
-
-    fn object(day: Day) -> ObjectName {
-        ObjectName::RefsBloom { day }
-    }
-}
-
-impl StoredKey for TreeKey {
-    const FILTER: &'static str = "trees";
-
-    fn object(day: Day) -> ObjectName {
-        ObjectName::TreesBloom { day }
     }
 }
 
@@ -217,14 +192,14 @@ impl<C: Clock> Flusher<C> {
     /// extended; one that cannot be extended is deleted. Only a failed
     /// request to the store is an error: the flush is tried again, and the
     /// filter is then read again.
-    async fn stored_filter<K: StoredKey>(
+    async fn stored_filter<K: BloomKey>(
         &self,
         day: Day,
     ) -> Result<Option<DayBloom<K>>, FlushError> {
         let Some(bytes) = get(self.store.as_ref(), &K::object(day)).await? else {
             tracing::warn!(
                 %day,
-                filter = K::FILTER,
+                filter = K::KIND,
                 "the day lists flushes but has no bloom filter; it gets none, and lookups read each file of the day"
             );
             return Ok(None);
@@ -242,7 +217,7 @@ impl<C: Clock> Flusher<C> {
         }
         tracing::warn!(
             %day,
-            filter = K::FILTER,
+            filter = K::KIND,
             %problem,
             "deleted the bloom filter of the day that this writer cannot extend; lookups read each file of the day"
         );
@@ -251,7 +226,7 @@ impl<C: Clock> Flusher<C> {
 
     /// A new filter of `day`, sized by the busiest of the days before it in
     /// the window.
-    async fn new_filter<K: StoredKey>(&self, day: Day) -> Result<DayBloom<K>, FlushError> {
+    async fn new_filter<K: BloomKey>(&self, day: Day) -> Result<DayBloom<K>, FlushError> {
         let mut busiest = 0;
         let mut earlier = day;
         for _ in 0..self.bloom_config.window_days.get() {
@@ -267,7 +242,7 @@ impl<C: Clock> Flusher<C> {
 
     /// The keys that this writer's filter of `day` holds; 0 when it has
     /// none that can be read, as a day without flushes.
-    async fn insertions_of<K: StoredKey>(&self, day: Day) -> Result<u64, FlushError> {
+    async fn insertions_of<K: BloomKey>(&self, day: Day) -> Result<u64, FlushError> {
         let Some(bytes) = get(self.store.as_ref(), &K::object(day)).await? else {
             return Ok(0);
         };
@@ -276,7 +251,7 @@ impl<C: Clock> Flusher<C> {
             Err(problem) => {
                 tracing::warn!(
                     %day,
-                    filter = K::FILTER,
+                    filter = K::KIND,
                     %problem,
                     "a bloom filter of the days before cannot be read; it does not size the new day"
                 );
@@ -287,7 +262,7 @@ impl<C: Clock> Flusher<C> {
 
     /// The filter in `bytes`, if it is this writer's filter of `day`, or
     /// why not.
-    fn own_filter<K: StoredKey>(&self, day: Day, bytes: &[u8]) -> Result<DayBloom<K>, String> {
+    fn own_filter<K: BloomKey>(&self, day: Day, bytes: &[u8]) -> Result<DayBloom<K>, String> {
         let filter = DayBloom::<K>::decode(bytes).map_err(|error| error_chain(&error))?;
         if filter.day() != day || *filter.writer_id() != self.writer_id {
             return Err(format!(

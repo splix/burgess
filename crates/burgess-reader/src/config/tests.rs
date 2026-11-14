@@ -81,6 +81,7 @@ refs_tail_bytes = 2048
 stop_slack_days = 2
 days_before = 1
 concurrent_files = 8
+bloom_above_candidates = 12
 
 [refs]
 concurrent_days = 6
@@ -114,6 +115,7 @@ concurrent_days = 3
                 stop_slack_days: 2,
                 days_before: 1,
                 concurrent_files: NonZeroUsize::new(8).unwrap(),
+                bloom_above_candidates: 12,
             }
         );
         assert_eq!(
@@ -209,5 +211,15 @@ fn rejects_a_default_limit_over_the_maximum() {
             matches!(settings, Err(ConfigError::Pages(_))),
             "{settings:?}"
         );
+    });
+}
+
+/// The candidates read in one wave need no filter, thus the threshold
+/// follows the files read at once unless it is set.
+#[test]
+fn the_filter_threshold_follows_the_files_read_at_once() {
+    let toml = format!("{MINIMAL}\n[lookup]\nconcurrent_files = 9\n");
+    load_in_jail(&toml, &[], |settings| {
+        assert_eq!(settings.unwrap().lookup.bloom_above_candidates, 9);
     });
 }

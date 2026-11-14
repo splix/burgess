@@ -7,6 +7,7 @@ use burgess_core::storage::{Day, FileStats, ObjectName};
 use futures::{Stream, StreamExt};
 
 use super::config::ScanConfig;
+use super::gate::DayGate;
 use super::problems::WalkProblems;
 use crate::cursor::{Given, Positioned, RowPosition, Walk};
 use crate::manifests::{DayFlushes, FlushGroup, ManifestCache, ManifestReadError};
@@ -64,32 +65,48 @@ impl DayScan<'_> {
     /// of `days`, after the row `from` if given, until `wanted` rows are
     /// found. `read` gets the last row of the file that a page gave.
     ///
+    /// `gate` tells of each day, before its manifest is read, whether the
+    /// day can hold rows, and gives `pick` what it knows of the day's
+    /// files. A skipped day costs no request for its manifest, and it can
+    /// hide no row, thus a manifest that it would not read is no problem.
+    ///
     /// The last of the `wanted` rows only tells that the answer goes on,
     /// thus a problem that can hide only rows after it is left to the next
     /// page.
-    pub(crate) async fn scan<R, E, F>(
+    pub(crate) async fn scan<R, E, F, G, P>(
         &self,
         days: Vec<Day>,
         from: Option<RowPosition>,
-        pick: impl Fn(&FlushGroup) -> Option<(ObjectName, FileStats)>,
+        gate: impl Fn(Day) -> G,
+        pick: impl Fn(&FlushGroup, &P) -> Option<(ObjectName, FileStats)>,
         read: impl Fn(ObjectName, FileStats, Option<u64>) -> F,
         wanted: NonZeroUsize,
     ) -> Found<Positioned<R>, E>
     where
         E: From<ManifestReadError>,
         F: Future<Output = Result<Vec<Numbered<R>>, E>>,
+        G: Future<Output = DayGate<P>>,
     {
         let read = &read;
+        let gate = &gate;
         let oldest = days.last().copied();
         // The days are newest first, thus a page gave all rows of the days
         // after the day of `from`.
-        let days = days
+        let days: Vec<Day> = days
             .into_iter()
             .skip_while(|day| from.is_some_and(|from| *day > from.day))
             .collect();
-        let mut reads = self
-            .manifests(days)
-            .flat_map(|manifest| futures::stream::iter(steps(manifest, &pick, from)))
+        let mut reads = futures::stream::iter(days)
+            .map(|day| async move {
+                match gate(day).await {
+                    DayGate::Skip => Ok(None),
+                    DayGate::Read(known) => {
+                        Ok(self.manifests.day(day).await?.map(|day| (day, known)))
+                    }
+                }
+            })
+            .buffered(self.config.concurrent_days.get())
+            .flat_map(|day| futures::stream::iter(steps(day, &pick, from)))
             .map(|step| async move {
                 match step {
                     Step::File {
@@ -169,16 +186,22 @@ fn picks<T>(
     })
 }
 
-/// The files of a day that `pick` selects and that have rows after `from`,
-/// newest flush first, or the problem of its manifest.
-fn steps<E: From<ManifestReadError>>(
-    manifest: Result<Option<Arc<DayFlushes>>, ManifestReadError>,
-    pick: impl Fn(&FlushGroup) -> Option<(ObjectName, FileStats)>,
+/// The files of a day that `pick` selects, with what the gate knows of the
+/// day, and that have rows after `from`, newest flush first, or the problem
+/// of its manifest.
+fn steps<E: From<ManifestReadError>, P>(
+    day: Result<Option<(Arc<DayFlushes>, P)>, ManifestReadError>,
+    pick: impl Fn(&FlushGroup, &P) -> Option<(ObjectName, FileStats)>,
     from: Option<RowPosition>,
 ) -> Vec<Step<E>> {
+    let (manifest, known) = match day {
+        Ok(Some((flushes, known))) => (Ok(Some(flushes)), Some(known)),
+        Ok(None) => return Vec::new(),
+        Err(error) => (Err(error), None),
+    };
     let files = picks(manifest, |group| {
         let after = Given::read_after(group, from, Walk::NewestFirst)?;
-        let (file, stats) = pick(group)?;
+        let (file, stats) = pick(group, known.as_ref()?)?;
         Some(Step::File {
             group: group.clone(),
             file,

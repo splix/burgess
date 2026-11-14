@@ -1,6 +1,7 @@
 //! Answers in pages: the pages together give the rows of one answer, and a
 //! cursor that cannot continue is refused.
 
+mod blooms;
 mod continuing;
 mod paging;
 mod problems;

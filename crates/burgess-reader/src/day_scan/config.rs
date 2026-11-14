@@ -7,9 +7,10 @@ use crate::tree_lookup::TreeLookupConfig;
 /// Settings of a walk over days, for a refs lookup or a states lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanConfig {
-    /// Days whose manifests are read ahead of the files. Each read waits on
-    /// a round trip to the store, and most days of a walk have no row that
-    /// the lookup wants.
+    /// Days whose filters and manifests are read ahead of the files. Each
+    /// read waits on a round trip to the store, and most days of a walk have
+    /// no row that the lookup wants. Each day read ahead holds its filter,
+    /// at least a megabyte, in memory.
     pub concurrent_days: NonZeroUsize,
     /// Files read at the same time, across days.
     pub concurrent_files: NonZeroUsize,

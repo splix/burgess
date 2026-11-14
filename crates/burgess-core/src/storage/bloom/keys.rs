@@ -5,6 +5,8 @@
 //! here" for keys they hold.
 
 use crate::flow::TreeId;
+use crate::storage::day::Day;
+use crate::storage::object_name::ObjectName;
 use crate::wire::UnixMillis;
 
 /// A key that a filter of one kind holds.
@@ -13,6 +15,12 @@ pub trait BloomKey {
     /// its own, thus a filter read for the other kind is refused: its
     /// probes would say "no" for keys that are there.
     const MAGIC: [u8; 4];
+
+    /// What logs call the filters of this kind.
+    const KIND: &'static str;
+
+    /// The name of the filter of this kind of `day`.
+    fn object(day: Day) -> ObjectName;
 
     /// The bytes that the filter hashes.
     fn bytes(&self) -> &[u8];
@@ -53,6 +61,11 @@ impl RefsKey {
 
 impl BloomKey for RefsKey {
     const MAGIC: [u8; 4] = *b"BGSB";
+    const KIND: &'static str = "refs";
+
+    fn object(day: Day) -> ObjectName {
+        ObjectName::RefsBloom { day }
+    }
 
     fn bytes(&self) -> &[u8] {
         &self.0
@@ -80,6 +93,11 @@ impl TreeKey {
 
 impl BloomKey for TreeKey {
     const MAGIC: [u8; 4] = *b"BGSC";
+    const KIND: &'static str = "trees";
+
+    fn object(day: Day) -> ObjectName {
+        ObjectName::TreesBloom { day }
+    }
 
     fn bytes(&self) -> &[u8] {
         &self.0

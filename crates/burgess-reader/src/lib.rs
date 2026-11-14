@@ -6,6 +6,8 @@
 
 pub mod manifests;
 
+pub mod blooms;
+
 pub mod parquet_file;
 
 pub mod states_file;

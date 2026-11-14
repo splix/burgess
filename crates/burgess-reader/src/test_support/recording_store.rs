@@ -23,6 +23,8 @@ use object_store::{
 pub(crate) struct RecordingStore {
     pub(crate) inner: InMemory,
     requests: Mutex<Vec<Request>>,
+    /// Reads of objects whose name ends so fail, as a store that is down.
+    failing: Mutex<Option<String>>,
 }
 
 /// One read request.
@@ -59,6 +61,11 @@ impl RecordingStore {
                     .unwrap_or_else(|| panic!("{} was read whole", request.path))
             })
             .collect()
+    }
+
+    /// Fails the reads of objects whose name ends with `suffix`, or none.
+    pub(crate) fn fail_reads_of(&self, suffix: Option<&str>) {
+        *self.failing.lock().unwrap() = suffix.map(str::to_string);
     }
 
     fn record(&self, location: &Path, ranges: Option<Vec<Range<u64>>>) {
@@ -113,6 +120,13 @@ impl ObjectStore for RecordingStore {
             }
             Some(GetRange::Bounded(range)) => self.record(location, Some(vec![range.clone()])),
             other => panic!("the reader must ask for bounded ranges, got {other:?}"),
+        }
+        let failing = self.failing.lock().unwrap().clone();
+        if failing.is_some_and(|suffix| location.as_ref().ends_with(&suffix)) {
+            return Err(object_store::Error::Generic {
+                store: "recording",
+                source: "the store is down".into(),
+            });
         }
         self.inner.get_opts(location, options).await
     }

@@ -4,7 +4,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use burgess_core::flow::{FlowId, TreeId};
-use burgess_core::storage::{Day, StateRow};
+use burgess_core::storage::{Day, StateRow, TreeKey};
 use futures::StreamExt;
 use jiff::civil::Date;
 use jiff::{Span, Timestamp};
@@ -12,6 +12,7 @@ use jiff::{Span, Timestamp};
 use super::config::TreeLookupConfig;
 use super::found::FoundTree;
 use super::walk::{DayOutcome, DayWalk, WalkRange};
+use crate::blooms::BloomReader;
 use crate::cursor::{Given, Positioned, RowPosition, Walk};
 use crate::day_scan::WalkProblems;
 use crate::manifests::{FlushGroup, ManifestCache};
@@ -23,19 +24,23 @@ use crate::states_lookup::StatesLookupError;
 /// the days they were written on.
 pub struct TreeLookup {
     manifests: Arc<ManifestCache>,
+    blooms: BloomReader,
     files: StatesFileReader,
     config: TreeLookupConfig,
 }
 
 impl TreeLookup {
-    /// A lookup over the days `manifests` lists and the files `files` reads.
+    /// A lookup over the days `manifests` lists, with the filters that
+    /// `blooms` reads, and the files `files` reads.
     pub fn new(
         manifests: Arc<ManifestCache>,
+        blooms: BloomReader,
         files: StatesFileReader,
         config: TreeLookupConfig,
     ) -> Self {
         TreeLookup {
             manifests,
+            blooms,
             files,
             config,
         }
@@ -54,9 +59,14 @@ impl TreeLookup {
     /// The walk starts on the id's day, or the configured days before it,
     /// but never before the oldest day still within retention.
     ///
+    /// A day with more candidate files than the configured threshold reads
+    /// its trees filter after its manifest, and opens only the files that
+    /// the filter can hold the tree in.
+    ///
     /// A day is negative when it has files and none of their bounds includes
     /// the tree, and positive when some do, whether or not those files turn
-    /// out to hold the tree's rows. A day without files, or whose manifest
+    /// out to hold the tree's rows: also when the filter rules them all out,
+    /// so the walk goes as far as without filters. A day without files, or whose manifest
     /// cannot be read, is neither. Without `until` the walk goes on past the
     /// configured slack of negative days in a row and stops on the next
     /// negative day after them. With it the walk
@@ -160,13 +170,18 @@ impl TreeLookup {
         if holding.is_empty() {
             return DayOutcome::Negative;
         }
-        let candidates: Vec<(FlushGroup, Option<u64>)> = holding
+        let mut candidates: Vec<(FlushGroup, Option<u64>)> = holding
             .into_iter()
             .filter_map(|group| {
                 let after = Given::read_after(group, from, Walk::OldestFirst)?;
                 Some((group.clone(), after))
             })
             .collect();
+        if candidates.len() > self.config.bloom_above_candidates
+            && let Some(filter) = self.blooms.trees(day).await
+        {
+            candidates.retain(|(group, _)| filter.may_contain(&TreeKey::file(group.nnnn(), tree)));
+        }
         for (group, read) in self.read(candidates, tree).await {
             match read {
                 Ok(read) => rows.extend(

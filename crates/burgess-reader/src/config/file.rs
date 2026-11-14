@@ -65,6 +65,8 @@ struct LookupSection {
     stop_slack_days: u32,
     days_before: u32,
     concurrent_files: NonZeroUsize,
+    /// `concurrent_files` when not given, so that the two do not drift.
+    bloom_above_candidates: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,6 +120,7 @@ impl Default for LookupSection {
             stop_slack_days: defaults.stop_slack_days,
             days_before: defaults.days_before,
             concurrent_files: defaults.concurrent_files,
+            bloom_above_candidates: None,
         }
     }
 }
@@ -163,6 +166,10 @@ impl TryFrom<FileConfig> for Settings {
                 stop_slack_days: file.lookup.stop_slack_days,
                 days_before: file.lookup.days_before,
                 concurrent_files: file.lookup.concurrent_files,
+                bloom_above_candidates: file
+                    .lookup
+                    .bloom_above_candidates
+                    .unwrap_or(file.lookup.concurrent_files.get()),
             },
             refs: ScanConfig {
                 concurrent_days: file.refs.concurrent_days,

@@ -9,6 +9,7 @@ use axum::serve::ListenerExt;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
+use crate::blooms::BloomReader;
 use crate::config::Settings;
 use crate::manifests::ManifestCache;
 use crate::queries::Queries;
@@ -77,11 +78,17 @@ impl Server {
         );
         let store = settings.store.open_existing()?;
         let manifests = Arc::new(ManifestCache::new(store.clone(), settings.manifests));
+        let blooms = BloomReader::new(store.clone());
         let states = StatesFileReader::new(store.clone(), settings.files);
         let refs = RefsFileReader::new(store, settings.files);
         let queries = Arc::new(Queries {
-            lookup: TreeLookup::new(manifests.clone(), states.clone(), settings.lookup),
-            refs: RefsLookup::new(manifests.clone(), refs, settings.refs),
+            lookup: TreeLookup::new(
+                manifests.clone(),
+                blooms.clone(),
+                states.clone(),
+                settings.lookup,
+            ),
+            refs: RefsLookup::new(manifests.clone(), blooms, refs, settings.refs),
             states: StatesLookup::new(manifests.clone(), states, settings.states),
             manifests,
             limits: settings.pages,

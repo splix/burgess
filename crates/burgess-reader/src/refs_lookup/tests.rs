@@ -188,8 +188,10 @@ async fn a_reference_stored_the_day_after_its_time_is_found() {
     );
 }
 
+/// The day has no filter, thus the lookup asks for it, then reads the
+/// manifest as without filters. The refs file without rows is not opened.
 #[tokio::test]
-async fn a_day_without_references_costs_its_manifest_only() {
+async fn a_day_without_references_and_filters_costs_a_filter_request_and_its_manifest() {
     let day = days_ago(1);
     let days = Days::new();
     days.put(
@@ -206,7 +208,10 @@ async fn a_day_without_references_costs_its_manifest_only() {
     let found = refs(&days, &query("ORD-1")).await;
 
     assert!(found.rows.is_empty());
-    assert_eq!(days.requests_on(day), [format!("{day}/manifest")]);
+    assert_eq!(
+        days.requests_on(day),
+        [format!("{day}/refs.bloom"), format!("{day}/manifest")]
+    );
 }
 
 #[tokio::test]
@@ -358,7 +363,12 @@ async fn a_walk_without_an_end_is_refused() {
         days.store.clone(),
         crate::parquet_file::FileReadConfig::default(),
     );
-    let lookup = RefsLookup::new(std::sync::Arc::new(manifests), files, ScanConfig::default());
+    let lookup = RefsLookup::new(
+        std::sync::Arc::new(manifests),
+        days.blooms(),
+        files,
+        ScanConfig::default(),
+    );
 
     let unbounded = lookup.refs(&query("ORD-1"), None, wanted(1)).await;
     let bounded = lookup

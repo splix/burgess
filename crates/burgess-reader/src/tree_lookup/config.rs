@@ -17,20 +17,30 @@ pub struct TreeLookupConfig {
     /// Candidate files of one day read at the same time. Each read waits on
     /// round trips to the store, so reading them together saves latency.
     pub concurrent_files: NonZeroUsize,
+    /// Candidate files of one day above which the lookup reads the day's
+    /// trees filter, and opens only the files that it can hold the tree in.
+    /// Fewer candidates are opened at once without it, thus the filter
+    /// would only add a request. The settings make it `concurrent_files`
+    /// when they do not give it.
+    pub bloom_above_candidates: usize,
 }
 
 impl Default for TreeLookupConfig {
     /// One day of slack after the last positive day, no day before the id's
-    /// own, and four files at a time.
+    /// own, four files at a time, and the filter above four candidates.
     ///
     /// The slack is decided. Starting before the id's day is undecided until
     /// clock skew is measured, so none is assumed. Four concurrent files is
-    /// provisional: most trees live in one or two files a day.
+    /// provisional: most trees live in one or two files a day. The filter
+    /// threshold is provisional too: as many candidates as are read at once
+    /// cost one wave of requests, which the filter would not shorten.
     fn default() -> Self {
+        let concurrent_files = NonZeroUsize::new(4).expect("not zero");
         TreeLookupConfig {
             stop_slack_days: 1,
             days_before: 0,
-            concurrent_files: NonZeroUsize::new(4).expect("not zero"),
+            concurrent_files,
+            bloom_above_candidates: concurrent_files.get(),
         }
     }
 }
