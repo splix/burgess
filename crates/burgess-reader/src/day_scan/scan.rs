@@ -7,7 +7,10 @@ use burgess_core::storage::{Day, FileStats, ObjectName};
 use futures::{Stream, StreamExt};
 
 use super::config::ScanConfig;
+use super::problems::WalkProblems;
+use crate::cursor::{Given, Positioned, RowPosition, Walk};
 use crate::manifests::{DayFlushes, FlushGroup, ManifestCache, ManifestReadError};
+use crate::parquet_file::Numbered;
 
 /// A walk over days, with the reads it does at the same time.
 pub(crate) struct DayScan<'a> {
@@ -27,8 +30,11 @@ pub struct Found<R, E> {
     /// In the order of the lookup: as the walk reads them, newest day and
     /// newest flush first, or sorted, when the lookup has an order.
     pub rows: Vec<R>,
-    /// Each manifest or file that could not be read, in walk order.
+    /// Each manifest or file that could not be read and can hide a row of
+    /// the page, in walk order.
     pub problems: Vec<E>,
+    /// The oldest day that the walk reads. `None` when it reads no day.
+    pub oldest: Option<Day>,
 }
 
 impl<R, E> Default for Found<R, E> {
@@ -36,52 +42,88 @@ impl<R, E> Default for Found<R, E> {
         Found {
             rows: Vec::new(),
             problems: Vec::new(),
+            oldest: None,
         }
     }
 }
 
 /// A step of a walk: a file to read, or a manifest that could not be read.
 enum Step<E> {
-    File(ObjectName, FileStats),
+    File {
+        group: FlushGroup,
+        file: ObjectName,
+        stats: FileStats,
+        /// The last row of the file that a page gave.
+        after: Option<u64>,
+    },
     Problem(E),
 }
 
 impl DayScan<'_> {
     /// The rows that `read` gives from the files that `pick` selects of each
-    /// of `days`, until `wanted` rows are found.
+    /// of `days`, after the row `from` if given, until `wanted` rows are
+    /// found. `read` gets the last row of the file that a page gave.
+    ///
+    /// The last of the `wanted` rows only tells that the answer goes on,
+    /// thus a problem that can hide only rows after it is left to the next
+    /// page.
     pub(crate) async fn scan<R, E, F>(
         &self,
         days: Vec<Day>,
+        from: Option<RowPosition>,
         pick: impl Fn(&FlushGroup) -> Option<(ObjectName, FileStats)>,
-        read: impl Fn(ObjectName, FileStats) -> F,
+        read: impl Fn(ObjectName, FileStats, Option<u64>) -> F,
         wanted: NonZeroUsize,
-    ) -> Found<R, E>
+    ) -> Found<Positioned<R>, E>
     where
         E: From<ManifestReadError>,
-        F: Future<Output = Result<Vec<R>, E>>,
+        F: Future<Output = Result<Vec<Numbered<R>>, E>>,
     {
         let read = &read;
+        let oldest = days.last().copied();
+        // The days are newest first, thus a page gave all rows of the days
+        // after the day of `from`.
+        let days = days
+            .into_iter()
+            .skip_while(|day| from.is_some_and(|from| *day > from.day))
+            .collect();
         let mut reads = self
             .manifests(days)
-            .flat_map(|manifest| futures::stream::iter(steps(manifest, &pick)))
+            .flat_map(|manifest| futures::stream::iter(steps(manifest, &pick, from)))
             .map(|step| async move {
                 match step {
-                    Step::File(file, stats) => read(file, stats).await,
+                    Step::File {
+                        group,
+                        file,
+                        stats,
+                        after,
+                    } => {
+                        let rows = read(file, stats, after).await?;
+                        Ok(rows
+                            .into_iter()
+                            .map(|row| Positioned::in_flush(&group, row))
+                            .collect::<Vec<_>>())
+                    }
                     Step::Problem(problem) => Err(problem),
                 }
             })
             .buffered(self.config.concurrent_files.get());
-        let mut found = Found::default();
+        let mut rows = Vec::new();
+        let mut problems = WalkProblems::new(Some(wanted));
         while let Some(read) = reads.next().await {
             match read {
-                Ok(rows) => found.rows.extend(rows),
-                Err(problem) => found.problems.push(problem),
+                Ok(read) => rows.extend(read),
+                Err(problem) => problems.push(problem, rows.len()),
             }
-            if found.rows.len() >= wanted.get() {
+            if rows.len() >= wanted.get() {
                 break;
             }
         }
-        found
+        Found {
+            problems: problems.of_page(rows.len()),
+            rows,
+            oldest,
+        }
     }
 }
 
@@ -127,17 +169,22 @@ fn picks<T>(
     })
 }
 
-/// The files of a day that `pick` selects, newest flush first, or the
-/// problem of its manifest.
+/// The files of a day that `pick` selects and that have rows after `from`,
+/// newest flush first, or the problem of its manifest.
 fn steps<E: From<ManifestReadError>>(
     manifest: Result<Option<Arc<DayFlushes>>, ManifestReadError>,
     pick: impl Fn(&FlushGroup) -> Option<(ObjectName, FileStats)>,
+    from: Option<RowPosition>,
 ) -> Vec<Step<E>> {
-    match picks(manifest, pick) {
-        Ok(files) => files
-            .into_iter()
-            .map(|(file, stats)| Step::File(file, stats))
-            .collect(),
-        Err(error) => vec![Step::Problem(error.into())],
-    }
+    let files = picks(manifest, |group| {
+        let after = Given::read_after(group, from, Walk::NewestFirst)?;
+        let (file, stats) = pick(group)?;
+        Some(Step::File {
+            group: group.clone(),
+            file,
+            stats,
+            after,
+        })
+    });
+    files.unwrap_or_else(|error| vec![Step::Problem(error.into())])
 }

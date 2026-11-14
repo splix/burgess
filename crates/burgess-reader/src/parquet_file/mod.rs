@@ -10,6 +10,7 @@ mod checks;
 mod config;
 mod open;
 mod problem;
+mod row_number;
 mod selection;
 mod stored_file;
 
@@ -17,4 +18,6 @@ pub(crate) use checks::leaf_column;
 pub use config::FileReadConfig;
 pub(crate) use open::OpenFile;
 pub use problem::FileProblem;
+pub use row_number::Numbered;
+pub(crate) use row_number::{RowNumbers, row_numbers};
 pub(crate) use selection::ColumnKey;

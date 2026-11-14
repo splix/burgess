@@ -15,7 +15,7 @@ use object_store::path::Path;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 
 use super::*;
-use crate::parquet_file::{FileProblem, FileReadConfig};
+use crate::parquet_file::{FileProblem, FileReadConfig, Numbered};
 use crate::test_support::RecordingStore;
 
 const FIRST_MS: u64 = 1_793_000_000_000;
@@ -122,9 +122,10 @@ impl Fixture {
         config: FileReadConfig,
         key: &RefKey,
     ) -> Result<Vec<RefRow>, RefsReadError> {
-        RefsFileReader::new(self.store.clone(), config)
-            .refs(&self.name, self.stats(), key)
-            .await
+        let rows = RefsFileReader::new(self.store.clone(), config)
+            .refs(&self.name, self.stats(), key, None)
+            .await?;
+        Ok(rows.into_iter().map(|row| row.row).collect())
     }
 
     async fn read(&self, key: &RefKey) -> Vec<RefRow> {
@@ -330,4 +331,46 @@ fn a_key_is_trimmed_and_checked_as_the_writer_checks_a_reference() {
     assert!(RefKey::new("order id".into(), "ORD-1".into()).is_err());
     assert!(RefKey::new("order_id".into(), "  ".into()).is_err());
     assert!(RefKey::new("order_id".into(), "x".repeat(257)).is_err());
+}
+
+/// A cursor names the last reference of a page by its number in the file,
+/// thus the numbers are those of the file, also when pages are skipped,
+/// and a read after a number starts at the next reference.
+#[tokio::test]
+async fn references_have_their_numbers_in_the_file_and_a_read_starts_after_one() {
+    let ids = [
+        ("order_id", "ORD-1"),
+        ("order_id", "ORD-2"),
+        ("order_id", "ORD-3"),
+    ];
+    let fixture = Fixture::new(references(&ids, 3000), 1000).await;
+    assert!(fixture.metadata().num_row_groups() > 3);
+    let wanted = key("order_id", "ORD-2");
+    let expected: Vec<u64> = fixture
+        .rows
+        .iter()
+        .zip(0..)
+        .filter(|(row, _)| row.domain_id == "ORD-2")
+        .map(|(_, number)| number)
+        .collect();
+    let reader = RefsFileReader::new(fixture.store.clone(), FileReadConfig::default());
+    let numbers =
+        |rows: Vec<Numbered<RefRow>>| -> Vec<u64> { rows.iter().map(|row| row.number).collect() };
+
+    let all = reader
+        .refs(&fixture.name, fixture.stats(), &wanted, None)
+        .await
+        .unwrap();
+    let after = reader
+        .refs(
+            &fixture.name,
+            fixture.stats(),
+            &wanted,
+            Some(expected[1_500]),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(numbers(all), expected);
+    assert_eq!(numbers(after), expected[1_501..]);
 }

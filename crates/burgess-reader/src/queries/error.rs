@@ -7,13 +7,15 @@ use burgess_core::storage::DayError;
 use burgess_core::validation::ValidationError;
 use jiff::Timestamp;
 
+use crate::cursor::{CursorError, WindowError};
 use crate::filter::FilterError;
 use crate::lookup_time::LookupTimeError;
 use crate::pages::LimitError;
 use crate::refs_lookup::UnboundedWalk;
 
-/// Why the service cannot serve a request. Each error is a fault of the
-/// request, and its message tells what to change.
+/// Why the service cannot serve a request. Its message tells what to
+/// change. Each error is a fault of the request, except an expired cursor:
+/// the request is right, but the rows that it continues are gone.
 #[derive(Debug, thiserror::Error)]
 pub enum RequestError {
     /// The id is not one that the method accepts.
@@ -79,9 +81,22 @@ pub enum RequestError {
     /// as a filter that no state passes.
     #[error("invalid where")]
     Where(#[from] FilterError),
-    /// No answer gives a cursor yet.
-    #[error("cursors are not served yet")]
-    Cursor,
+    /// The cursor cannot continue a request.
+    #[error("invalid cursor")]
+    Cursor(#[from] CursorError),
+    /// The cursor is of another kind of answer than the request asks for,
+    /// for example of an answer in another order. Only a cursor that was
+    /// not made by this service can be one.
+    #[error("the cursor is not one that this request gives")]
+    CursorMismatch,
+    /// The rows that the cursor points to are no longer stored: retention
+    /// deleted them, or the writer dropped the flush. Refused, because the
+    /// answer cannot continue where it stopped.
+    #[error("the cursor has expired; send the request again without a cursor")]
+    Expired,
+    /// The times of the request cannot be the window of a cursor.
+    #[error(transparent)]
+    Window(#[from] WindowError),
 }
 
 impl RequestError {

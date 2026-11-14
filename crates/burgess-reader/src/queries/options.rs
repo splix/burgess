@@ -8,18 +8,16 @@ use burgess_api::grpc::{
 use jiff::Timestamp;
 
 use super::error::{RequestError, TimeField};
-use super::non_empty;
 use crate::lookup_time;
 use crate::ordering::TsOrder;
 use crate::pages::PageLimits;
 
 /// The options of a lookup request, as given.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct PageOptions<'a> {
+pub(super) struct PageOptions {
     until_ms: Option<i64>,
     limit: Option<u32>,
     order: i32,
-    cursor: Option<&'a str>,
 }
 
 /// The options of a lookup request, checked.
@@ -32,7 +30,7 @@ pub(super) struct PageRequest {
     pub(super) limit: NonZeroUsize,
 }
 
-impl PageOptions<'_> {
+impl PageOptions {
     /// The options of a method without an order, checked against what the
     /// service serves.
     pub(super) fn check(self, limits: &PageLimits) -> Result<PageRequest, RequestError> {
@@ -49,9 +47,6 @@ impl PageOptions<'_> {
         limits: &PageLimits,
     ) -> Result<(PageRequest, Option<TsOrder>), RequestError> {
         let order = self.order()?;
-        if non_empty(self.cursor).is_some() {
-            return Err(RequestError::Cursor);
-        }
         let until = self
             .until_ms
             .map(|until_ms| time(TimeField::Until, until_ms))
@@ -68,7 +63,7 @@ impl PageOptions<'_> {
     }
 }
 
-impl PageOptions<'_> {
+impl PageOptions {
     /// The order asked for. Checked first, thus an order is refused for
     /// itself, whatever the other options are.
     fn order(&self) -> Result<Option<TsOrder>, RequestError> {
@@ -97,13 +92,12 @@ pub(super) fn on_a_day(field: TimeField, time: Timestamp) -> Result<Timestamp, R
 /// The requests that have the same options, with the same names.
 macro_rules! page_options_of {
     ($($request:ty),+) => {$(
-        impl<'a> From<&'a $request> for PageOptions<'a> {
-            fn from(request: &'a $request) -> Self {
+        impl From<&$request> for PageOptions {
+            fn from(request: &$request) -> Self {
                 PageOptions {
                     until_ms: request.until_ms,
                     limit: request.limit,
                     order: request.order,
-                    cursor: request.cursor.as_deref(),
                 }
             }
         }

@@ -12,7 +12,7 @@ use burgess_core::wire::{PayloadType, UnixMillis};
 
 use super::error::StatesFileProblem;
 use super::stored_state::StoredState;
-use crate::parquet_file::FileProblem;
+use crate::parquet_file::{FileProblem, Numbered, RowNumbers, row_numbers};
 
 /// A row that breaks the rules the writer follows, so it cannot be returned
 /// as a state or a split.
@@ -47,6 +47,7 @@ pub(super) struct StatesBatch<'a> {
     meta: Meta<'a>,
     payload_type: &'a StringArray,
     payload: &'a BinaryArray,
+    numbers: RowNumbers<'a>,
 }
 
 /// The `meta` map column with its keys and values typed.
@@ -78,6 +79,7 @@ impl<'a> TryFrom<&'a RecordBatch> for StatesBatch<'a> {
             meta: Meta::try_from(column::<MapArray>(batch, StatesColumn::Meta)?)?,
             payload_type: column(batch, StatesColumn::PayloadType)?,
             payload: column(batch, StatesColumn::Payload)?,
+            numbers: row_numbers(batch)?,
         })
     }
 }
@@ -116,7 +118,10 @@ impl Meta<'_> {
 
 impl StatesBatch<'_> {
     /// The rows of `tree`, in the order the batch holds them.
-    pub(super) fn rows_of(&self, tree: TreeId) -> Result<Vec<StateRow>, StatesFileProblem> {
+    pub(super) fn rows_of(
+        &self,
+        tree: TreeId,
+    ) -> Result<Vec<Numbered<StateRow>>, StatesFileProblem> {
         (0..self.tree.len())
             .filter(|&row| self.tree.value(row) == tree.as_bytes().as_slice())
             .map(|row| self.checked(row, |row| self.row(tree, row)))
@@ -126,22 +131,27 @@ impl StatesBatch<'_> {
     /// Each row of the batch as a state, in the order the batch holds them.
     /// A filter on the kind keeps out splits, thus any other kind than a
     /// state is unknown.
-    pub(super) fn states(&self) -> Result<Vec<StoredState>, StatesFileProblem> {
+    pub(super) fn states(&self) -> Result<Vec<Numbered<StoredState>>, StatesFileProblem> {
         (0..self.tree.len())
             .map(|row| self.checked(row, |row| self.state(row)))
             .collect()
     }
 
-    /// The decoded `row`, or a problem that tells which row it is.
+    /// The decoded `row` with its number, or a problem that tells which row
+    /// it is.
     fn checked<T>(
         &self,
         row: usize,
         decode: impl FnOnce(usize) -> Result<T, InvalidRow>,
-    ) -> Result<T, StatesFileProblem> {
-        decode(row).map_err(|problem| StatesFileProblem::Row {
+    ) -> Result<Numbered<T>, StatesFileProblem> {
+        let decoded = decode(row).map_err(|problem| StatesFileProblem::Row {
             subflow: Subflow::from(self.subflow.value(row)),
             ts_millis: self.ts.value(row),
             problem,
+        })?;
+        Ok(Numbered {
+            number: self.numbers.of(row),
+            row: decoded,
         })
     }
 

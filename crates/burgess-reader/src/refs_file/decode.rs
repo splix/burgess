@@ -9,7 +9,7 @@ use burgess_core::wire::UnixMillis;
 
 use super::error::RefsFileProblem;
 use super::key::RefKey;
-use crate::parquet_file::FileProblem;
+use crate::parquet_file::{FileProblem, Numbered, RowNumbers, row_numbers};
 
 /// The columns of one decoded batch of a refs file, typed.
 pub(super) struct RefsBatch<'a> {
@@ -20,6 +20,7 @@ pub(super) struct RefsBatch<'a> {
     tree: &'a FixedSizeBinaryArray,
     subflow: &'a UInt32Array,
     ts: &'a TimestampMillisecondArray,
+    numbers: RowNumbers<'a>,
 }
 
 impl<'a> TryFrom<&'a RecordBatch> for RefsBatch<'a> {
@@ -38,19 +39,25 @@ impl<'a> TryFrom<&'a RecordBatch> for RefsBatch<'a> {
             tree,
             subflow: column(batch, RefsColumn::Subflow)?,
             ts: column(batch, RefsColumn::Ts)?,
+            numbers: row_numbers(batch)?,
         })
     }
 }
 
 impl RefsBatch<'_> {
     /// The references to `key`, in the order the batch holds them.
-    pub(super) fn rows_of(&self, key: &RefKey) -> Result<Vec<RefRow>, RefsFileProblem> {
+    pub(super) fn rows_of(&self, key: &RefKey) -> Result<Vec<Numbered<RefRow>>, RefsFileProblem> {
         (0..self.ref_type.len())
             .filter(|&row| {
                 self.ref_type.value(row) == key.ref_type()
                     && self.domain_id.value(row) == key.domain_id()
             })
-            .map(|row| self.row(row))
+            .map(|row| {
+                Ok(Numbered {
+                    number: self.numbers.of(row),
+                    row: self.row(row)?,
+                })
+            })
             .collect()
     }
 

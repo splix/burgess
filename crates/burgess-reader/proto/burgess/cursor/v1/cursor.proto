@@ -28,6 +28,9 @@ message Cursor {
     // In an answer ordered by the state time.
     OrderedPosition ordered = 6;
   }
+  // The oldest day that the rest of the answer reads, "YYYYMMDD". When
+  // retention deletes it, the rest of the answer is gone.
+  string oldest_day = 7;
 }
 
 // A row of a stored file.

@@ -175,33 +175,44 @@ fn a_row_that_a_client_cannot_read_is_refused_with_the_cause() {
     ));
 }
 
+/// Messages without a cursor.
 fn responses(items: Vec<TreeItem>) -> Vec<GetTreeResponse> {
-    items.into_iter().map(GetTreeResponse::from_item).collect()
+    items
+        .into_iter()
+        .map(|item| GetTreeResponse::from_item(item, None))
+        .collect()
+}
+
+fn with_cursor(item: TreeItem, cursor: &str) -> GetTreeResponse {
+    GetTreeResponse::from_item(item, Some(cursor.into()))
 }
 
 #[test]
 fn messages_make_the_page_in_their_order() {
-    let page = Page::from_responses(responses(vec![
-        TreeItem::Problem(Problem {
-            message: "a file is gone".into(),
-        }),
-        TreeItem::Row(state()),
-        TreeItem::Row(split()),
-        TreeItem::Truncated,
-    ]));
+    let mut messages = responses(vec![TreeItem::Problem(Problem {
+        message: "a file is gone".into(),
+    })]);
+    messages.push(with_cursor(TreeItem::Row(state()), "FIRST"));
+    messages.push(with_cursor(TreeItem::Row(split()), "SECOND"));
+    let page = Page::from_responses(messages);
 
     assert_eq!(page.problems, ["a file is gone"]);
     let subflows: Vec<u32> = page.rows.iter().map(|row| row.subflow.into()).collect();
     assert_eq!(subflows, [7, 0]);
-    assert!(page.truncated);
+    assert_eq!(page.cursor.as_deref(), Some("SECOND"));
 }
 
+/// The last row of an answer has no cursor, thus the page that holds it
+/// has none.
 #[test]
-fn a_page_without_truncated_is_complete() {
-    let page = Page::from_responses(responses(vec![TreeItem::Row(state())]));
+fn a_page_whose_last_row_has_no_cursor_is_the_last_page() {
+    let page = Page::from_responses(vec![
+        with_cursor(TreeItem::Row(state()), "FIRST"),
+        GetTreeResponse::from_item(TreeItem::Row(split()), None),
+    ]);
 
-    assert_eq!(page.rows.len(), 1);
-    assert!(!page.truncated);
+    assert_eq!(page.rows.len(), 2);
+    assert_eq!(page.cursor, None);
     assert!(page.problems.is_empty());
 }
 
@@ -211,7 +222,10 @@ fn what_the_page_cannot_hold_becomes_a_problem_and_the_rest_is_kept() {
         ts_ms: i64::MAX,
         ..state()
     };
-    let unknown = GetTreeResponse { item: None };
+    let unknown = GetTreeResponse {
+        item: None,
+        cursor: None,
+    };
 
     let mut messages = responses(vec![TreeItem::Row(bad_time), TreeItem::Row(split())]);
     messages.push(unknown);
@@ -232,12 +246,16 @@ fn tree_and_flow_messages_hold_the_same_items() {
         TreeItem::Problem(Problem {
             message: "a file is gone".into(),
         }),
-        TreeItem::Truncated,
     ];
 
     for item in items {
-        let tree = GetTreeResponse::from_item(item.clone()).into_item();
-        let flow = GetFlowResponse::from_item(item.clone()).into_item();
+        let tree = GetTreeResponse::from_item(item.clone(), Some("C".into()));
+        let flow = GetFlowResponse::from_item(item.clone(), Some("C".into()));
+        assert_eq!(
+            (tree.cursor_after(), flow.cursor_after()),
+            (Some("C"), Some("C"))
+        );
+        let (tree, flow) = (tree.into_item(), flow.into_item());
         assert_eq!((tree.as_ref(), flow.as_ref()), (Some(&item), Some(&item)));
     }
 }
@@ -270,25 +288,25 @@ fn state_messages_make_a_page_of_rows() {
             item: Some(list_states_response::Item::Problem(Problem {
                 message: "a file is gone".into(),
             })),
+            cursor: None,
         },
         ListStatesResponse {
             item: Some(list_states_response::Item::Row(state_row())),
+            cursor: Some("FIRST".into()),
         },
         ListStatesResponse {
             item: Some(list_states_response::Item::Row(StateRow {
                 tree: "zz".into(),
                 ..state_row()
             })),
-        },
-        ListStatesResponse {
-            item: Some(list_states_response::Item::Truncated(Truncated {})),
+            cursor: Some("SECOND".into()),
         },
     ];
 
     let page = Page::from_responses(messages);
 
     assert_eq!(page.rows.len(), 1);
-    assert!(page.truncated);
+    assert_eq!(page.cursor.as_deref(), Some("SECOND"));
     assert_eq!(page.problems.len(), 2, "{:?}", page.problems);
     assert_eq!(page.problems[0], "a file is gone");
 }
@@ -307,6 +325,7 @@ fn a_reference_reads_as_rest_sends_it() {
     };
     let messages = [ListRefsResponse {
         item: Some(list_refs_response::Item::Row(message)),
+        cursor: None,
     }];
 
     let page = Page::from_responses(messages);
@@ -324,7 +343,6 @@ fn a_reference_reads_as_rest_sends_it() {
                 "subflow": 7,
                 "ts": 1_793_000_000_123_i64,
             }],
-            "truncated": false,
         })
     );
 }

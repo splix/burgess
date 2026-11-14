@@ -83,7 +83,7 @@ async fn a_tree_answers_with_every_row_in_the_api_shape() {
     let page = page(router_over(&days), &format!("/v1/trees/{tree}")).await;
 
     assert_eq!(subflows(&page), [0, 0, 0, 1, 2, 4]);
-    assert!(!page.truncated);
+    assert_eq!(page.cursor, None);
     assert!(page.problems.is_empty());
     let state = &page.rows[0];
     assert_eq!((state.kind, state.tree), (RowKind::State, tree));
@@ -190,13 +190,17 @@ async fn an_until_on_no_day_is_refused() {
 }
 
 #[tokio::test]
-async fn a_limit_cuts_the_page_and_says_so() {
+async fn a_limit_cuts_the_page_and_gives_the_cursor_of_the_rest() {
     let (days, tree) = one_tree().await;
+    let router = router_over(&days);
 
-    let page = page(router_over(&days), &format!("/v1/trees/{tree}?limit=2")).await;
+    let first = page(router.clone(), &format!("/v1/trees/{tree}?limit=2")).await;
+    let cursor = first.cursor.clone().expect("a cursor to the rest");
+    let rest = page(router, &format!("/v1/trees/{tree}?cursor={cursor}")).await;
 
-    assert_eq!(subflows(&page), [0, 0]);
-    assert!(page.truncated);
+    assert_eq!(subflows(&first), [0, 0]);
+    assert_eq!(subflows(&rest), [0, 1, 2, 4]);
+    assert_eq!(rest.cursor, None);
 }
 
 #[tokio::test]
@@ -364,10 +368,10 @@ async fn rest_and_grpc_answer_with_the_same_page() {
     .await;
 
     assert_eq!(rest_tree, grpc_tree);
-    assert_eq!(rest_tree["truncated"], true, "{rest_tree}");
-    assert_eq!(rest_tree["problems"].as_array().map(Vec::len), Some(1));
+    assert!(rest_tree["cursor"].is_string(), "{rest_tree}");
     assert_eq!(rest_flow, grpc_flow);
     assert_eq!(rest_flow["rows"].as_array().map(Vec::len), Some(2));
+    assert_eq!(rest_flow["problems"].as_array().map(Vec::len), Some(1));
 
     let rest_refusal = refused(router(queries), &format!("/v1/flows/{flow}?limit=0")).await;
     let grpc_refusal = grpc

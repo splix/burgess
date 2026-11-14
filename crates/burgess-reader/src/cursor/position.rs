@@ -5,6 +5,8 @@ use burgess_core::wire::UnixMillis;
 
 use super::error::CursorError;
 use super::proto;
+use crate::manifests::FlushGroup;
+use crate::parquet_file::Numbered;
 
 /// The last row that an answer gave. The next page starts after it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,19 +25,65 @@ pub enum Position {
     },
 }
 
+impl Position {
+    /// The stored row of the position.
+    pub fn row(&self) -> RowPosition {
+        match *self {
+            Position::Unordered(row) | Position::Ordered { row, .. } => row,
+        }
+    }
+}
+
 /// A row of a stored file.
 ///
 /// A stored file is named by its day and its flush time, thus the cursor
 /// keeps both. Then the next page finds the manifest of the file without a
 /// scan of the days, and does not depend on how the writer picks the day.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Positions compare by day, by flush, then by row, which is the order of
+/// the stored rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RowPosition {
     /// The day folder of the file.
     pub day: Day,
     /// The flush time that names the file.
     pub nnnn: UnixMillis,
-    /// The index of the row, in the order of the file.
+    /// The number of the row in its file, from 0. It is the number of the
+    /// row as stored, thus the same on each page.
     pub index: u64,
+}
+
+/// A row of an answer, and where it is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Positioned<T> {
+    /// Where the row is, as a cursor after it tells.
+    pub position: RowPosition,
+    /// The row.
+    pub row: T,
+}
+
+impl RowPosition {
+    /// The first row of the files of `group`.
+    pub(crate) fn first_in(group: &FlushGroup) -> Self {
+        RowPosition {
+            day: group.day(),
+            nnnn: group.nnnn(),
+            index: 0,
+        }
+    }
+}
+
+impl<T> Positioned<T> {
+    /// `row`, read from a file of `group`.
+    pub(crate) fn in_flush(group: &FlushGroup, row: Numbered<T>) -> Self {
+        Positioned {
+            position: RowPosition {
+                index: row.number,
+                ..RowPosition::first_in(group)
+            },
+            row: row.row,
+        }
+    }
 }
 
 impl From<Position> for proto::cursor::Position {

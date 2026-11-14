@@ -12,7 +12,7 @@ use object_store::ObjectStoreExt;
 use super::*;
 use crate::day_scan::ScanConfig;
 use crate::refs_file::RefKey;
-use crate::test_support::{Days, around, at, days_ago, minted_on, noon};
+use crate::test_support::{Days, around, at, days_ago, minted_on, noon, stored};
 
 /// A reference to `domain_id` from subflow `subflow` of `tree`, `offset`
 /// milliseconds after noon of `day`.
@@ -44,7 +44,7 @@ fn wanted(rows: usize) -> NonZeroUsize {
 
 async fn refs(days: &Days, query: &RefsQuery) -> FoundRefs {
     days.refs_lookup(ScanConfig::default())
-        .refs(query, wanted(100))
+        .refs(query, None, wanted(100))
         .await
         .unwrap()
 }
@@ -54,7 +54,7 @@ fn flows(found: &FoundRefs) -> Vec<(TreeId, u32)> {
     found
         .rows
         .iter()
-        .map(|row| (row.tree, u32::from(row.subflow)))
+        .map(|row| (row.row.tree, u32::from(row.row.subflow)))
         .collect()
 }
 
@@ -112,7 +112,11 @@ async fn service_category_since_and_until_filter_the_rows() {
     .await;
     let time = |offset: u64| Timestamp::from_millisecond(at(day, offset) as i64).unwrap();
     let subflows = |found: FoundRefs| -> Vec<u32> {
-        let mut subflows: Vec<u32> = found.rows.iter().map(|row| row.subflow.into()).collect();
+        let mut subflows: Vec<u32> = found
+            .rows
+            .iter()
+            .map(|row| row.row.subflow.into())
+            .collect();
         subflows.sort();
         subflows
     };
@@ -177,7 +181,7 @@ async fn a_reference_stored_the_day_after_its_time_is_found() {
     )
     .await;
 
-    assert_eq!(found.rows, [late]);
+    assert_eq!(stored(&found.rows), [late]);
     assert!(
         !days.manifest_days().contains(&days_ago(1)),
         "no day after the day after until"
@@ -250,13 +254,13 @@ async fn the_walk_stops_when_it_has_the_rows_wanted() {
             concurrent_files: wanted(1),
             ..ScanConfig::default()
         })
-        .refs(&query("ORD-1"), wanted(1))
+        .refs(&query("ORD-1"), None, wanted(1))
         .await
         .unwrap();
 
     assert_eq!(found.rows.len(), 1);
     assert_eq!(
-        found.rows[0].tree,
+        found.rows[0].row.tree,
         minted_on(new, 2),
         "the newest flush first"
     );
@@ -311,6 +315,7 @@ async fn days_before_extend_the_walk_before_since() {
                 since: Some(noon(since_day)),
                 ..query("ORD-1")
             },
+            None,
             wanted(100),
         )
         .await
@@ -355,13 +360,14 @@ async fn a_walk_without_an_end_is_refused() {
     );
     let lookup = RefsLookup::new(std::sync::Arc::new(manifests), files, ScanConfig::default());
 
-    let unbounded = lookup.refs(&query("ORD-1"), wanted(1)).await;
+    let unbounded = lookup.refs(&query("ORD-1"), None, wanted(1)).await;
     let bounded = lookup
         .refs(
             &RefsQuery {
                 since: Some(noon(days_ago(2))),
                 ..query("ORD-1")
             },
+            None,
             wanted(1),
         )
         .await;

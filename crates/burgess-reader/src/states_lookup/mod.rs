@@ -15,15 +15,18 @@
 mod error;
 mod lookup;
 mod ordered;
+mod scan;
 
 pub use error::StatesLookupError;
 pub use lookup::StatesLookup;
+pub use scan::{StatesScan, TimeKey};
 
+use crate::cursor::Positioned;
 use crate::day_scan::Found;
 use crate::states_file::StoredState;
 
 /// The states a lookup found, and what it could not read.
-pub type FoundStates = Found<StoredState, StatesLookupError>;
+pub type FoundStates = Found<Positioned<StoredState>, StatesLookupError>;
 
 #[cfg(test)]
 mod tests;

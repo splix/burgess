@@ -1,9 +1,10 @@
 //! Looking a tree up across days.
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use burgess_core::flow::{FlowId, TreeId};
-use burgess_core::storage::{Day, FileStats, ObjectName, StateRow};
+use burgess_core::storage::{Day, StateRow};
 use futures::StreamExt;
 use jiff::civil::Date;
 use jiff::{Span, Timestamp};
@@ -11,8 +12,12 @@ use jiff::{Span, Timestamp};
 use super::config::TreeLookupConfig;
 use super::found::FoundTree;
 use super::walk::{DayOutcome, DayWalk, WalkRange};
-use crate::manifests::ManifestCache;
+use crate::cursor::{Given, Positioned, RowPosition, Walk};
+use crate::day_scan::WalkProblems;
+use crate::manifests::{FlushGroup, ManifestCache};
+use crate::parquet_file::Numbered;
 use crate::states_file::{StatesFileReader, StatesReadError};
+use crate::states_lookup::StatesLookupError;
 
 /// Finds every row of a tree, or of a flow and the flows below it, across
 /// the days they were written on.
@@ -36,8 +41,15 @@ impl TreeLookup {
         }
     }
 
-    /// Every row of `tree` that can be read, states and splits, and what
-    /// could not be read.
+    /// The rows of `tree` that can be read, states and splits, after the
+    /// row `from` if given, and what could not be read. With `wanted`, the
+    /// walk stops after the first day that brings the rows to that count,
+    /// and the last of them only tells that the answer goes on, as in a
+    /// day scan.
+    ///
+    /// A walk that continues after `from` starts on its day. That day held
+    /// the tree, thus the walk then goes on as the walk of the first page
+    /// did.
     ///
     /// The walk starts on the id's day, or the configured days before it,
     /// but never before the oldest day still within retention.
@@ -51,16 +63,35 @@ impl TreeLookup {
     /// visits every day up to the day after `until`; `until` picks days only
     /// and filters no rows. Either way the walk ends at tomorrow by this
     /// host's clock, since the writer can have stored nothing later.
-    pub async fn tree(&self, tree: TreeId, until: Option<Timestamp>) -> FoundTree {
-        let mut found = FoundTree::default();
-        let Some(mut walk) = self.walk(tree, until) else {
-            return found;
+    pub async fn tree(
+        &self,
+        tree: TreeId,
+        until: Option<Timestamp>,
+        from: Option<RowPosition>,
+        wanted: Option<NonZeroUsize>,
+    ) -> FoundTree {
+        let Some(range) = self.range(tree, from) else {
+            return FoundTree::default();
         };
+        let Ok(until) = until.map(Day::utc).transpose() else {
+            return FoundTree::default();
+        };
+        let oldest = range.first;
+        let mut walk = DayWalk::new(range, until, self.config.stop_slack_days);
+        let mut rows = Vec::new();
+        let mut problems = WalkProblems::new(wanted);
         while let Some(day) = walk.next_day() {
-            let outcome = self.visit(day, tree, &mut found).await;
+            let outcome = self.visit(day, tree, from, &mut rows, &mut problems).await;
             walk.visited(outcome);
+            if wanted.is_some_and(|wanted| rows.len() >= wanted.get()) {
+                break;
+            }
         }
-        found
+        FoundTree {
+            problems: problems.of_page(rows.len()),
+            rows,
+            oldest: Some(oldest),
+        }
     }
 
     /// Every row of `flow` and of the flows split off below it, at any
@@ -73,12 +104,13 @@ impl TreeLookup {
     /// split was filed after them is left out, even when its own rows were
     /// filed in time.
     pub async fn flow(&self, flow: FlowId, until: Option<Timestamp>) -> FoundTree {
-        self.tree(flow.tree(), until).await.subtree(flow.subflow())
+        let tree = self.tree(flow.tree(), until, None, None).await;
+        tree.subtree(flow.subflow())
     }
 
     /// The days to visit, or `None` when no day can hold the tree: the id's
-    /// day or `until` lies outside the days a `Day` can name.
-    fn walk(&self, tree: TreeId, until: Option<Timestamp>) -> Option<DayWalk> {
+    /// day lies outside the days a `Day` can name.
+    fn range(&self, tree: TreeId, from: Option<RowPosition>) -> Option<WalkRange> {
         let minted = Day::utc(tree.started_at()).ok()?;
         let oldest = self.manifests.oldest_kept();
         let at_least_oldest = |day: Day| oldest.map_or(day, |oldest| day.max(oldest));
@@ -86,14 +118,13 @@ impl TreeLookup {
         let first = self
             .days_before(minted)
             .map_or(oldest.unwrap_or(minted), at_least_oldest);
-        let until = until.map(Day::utc).transpose().ok()?;
         let today = Day::utc(Timestamp::now()).ok()?;
-        let range = WalkRange {
+        let first = from.map_or(first, |from| from.day.max(first));
+        Some(WalkRange {
             first,
             counted_from: at_least_oldest(minted),
             latest: today.next().unwrap_or(today),
-        };
-        Some(DayWalk::new(range, until, self.config.stop_slack_days))
+        })
     }
 
     /// The configured days before `minted`, or `None` when that day is
@@ -106,41 +137,63 @@ impl TreeLookup {
         Day::try_from(date).ok()
     }
 
-    /// Reads the day's files that may hold `tree` into `found`, and tells
-    /// what the day said about the tree.
-    async fn visit(&self, day: Day, tree: TreeId, found: &mut FoundTree) -> DayOutcome {
+    /// Reads the day's files that may hold `tree`, after the row `from`,
+    /// into `rows` and `problems`, and tells what the day said about the
+    /// tree.
+    async fn visit(
+        &self,
+        day: Day,
+        tree: TreeId,
+        from: Option<RowPosition>,
+        rows: &mut Vec<Positioned<StateRow>>,
+        problems: &mut WalkProblems<StatesLookupError>,
+    ) -> DayOutcome {
         let flushes = match self.manifests.day(day).await {
             Ok(Some(flushes)) if !flushes.groups().is_empty() => flushes,
             Ok(_) => return DayOutcome::Unknown,
             Err(error) => {
-                found.problems.push(error.into());
+                problems.push(error.into(), rows.len());
                 return DayOutcome::Unknown;
             }
         };
-        let candidates: Vec<(ObjectName, FileStats)> = flushes
-            .holding(tree)
-            .map(|group| (group.states_file(), group.states()))
-            .collect();
-        if candidates.is_empty() {
+        let holding: Vec<&FlushGroup> = flushes.holding(tree).collect();
+        if holding.is_empty() {
             return DayOutcome::Negative;
         }
-        for read in self.read(candidates, tree).await {
+        let candidates: Vec<(FlushGroup, Option<u64>)> = holding
+            .into_iter()
+            .filter_map(|group| {
+                let after = Given::read_after(group, from, Walk::OldestFirst)?;
+                Some((group.clone(), after))
+            })
+            .collect();
+        for (group, read) in self.read(candidates, tree).await {
             match read {
-                Ok(rows) => found.rows.extend(rows),
-                Err(error) => found.problems.push(error.into()),
+                Ok(read) => rows.extend(
+                    read.into_iter()
+                        .map(|row| Positioned::in_flush(&group, row)),
+                ),
+                Err(error) => problems.push(error.into(), rows.len()),
             }
         }
         DayOutcome::Positive
     }
 
-    /// The rows of `tree` in each of `candidates`, in their order.
+    /// The rows of `tree` in the states file of each of `candidates`, after
+    /// the row it gives, in their order.
     async fn read(
         &self,
-        candidates: Vec<(ObjectName, FileStats)>,
+        candidates: Vec<(FlushGroup, Option<u64>)>,
         tree: TreeId,
-    ) -> Vec<Result<Vec<StateRow>, StatesReadError>> {
+    ) -> Vec<(FlushGroup, Result<Vec<Numbered<StateRow>>, StatesReadError>)> {
         futures::stream::iter(candidates)
-            .map(|(file, stats)| async move { self.files.tree(&file, stats, tree).await })
+            .map(|(group, after)| async move {
+                let read = self
+                    .files
+                    .tree(&group.states_file(), group.states(), tree, after)
+                    .await;
+                (group, read)
+            })
             .buffered(self.config.concurrent_files.get())
             .collect()
             .await

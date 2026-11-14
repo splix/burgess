@@ -3,12 +3,16 @@
 //! The service keeps no state between pages. Thus the cursor carries all
 //! that the next page needs: the last row given and the window of the
 //! first page. A window without an end ends at "now", which moves; with the
-//! window of the first page, the pages do not drift.
+//! window of the first page, the pages do not drift. It also carries the
+//! oldest day that the rest of the answer reads, thus the next page knows
+//! when retention deleted a part of the answer.
 //!
 //! The cursor also carries a hash of its request. Its position has no
 //! meaning in another scan, thus a cursor is refused with another request.
 
+mod cursors;
 mod error;
+mod given;
 mod position;
 mod query_hash;
 mod window;
@@ -16,11 +20,14 @@ mod window;
 #[cfg(test)]
 mod tests;
 
+pub use cursors::Cursors;
 pub use error::CursorError;
-pub use position::{Position, RowPosition};
+pub(crate) use given::{Given, Walk};
+pub use position::{Position, Positioned, RowPosition};
 pub use query_hash::{PagedMethod, PagedRequest, QueryHash};
 pub use window::{Window, WindowError};
 
+use burgess_core::storage::Day;
 use data_encoding::{BASE32_NOPAD, Encoding};
 use prost::Message;
 
@@ -47,6 +54,10 @@ pub struct Cursor {
     pub window: Window,
     /// The last row given.
     pub position: Position,
+    /// The oldest day that the rest of the answer reads. When retention
+    /// deletes it, rows of the answer are gone, thus the cursor expires
+    /// even though the file of its row is still stored.
+    pub oldest: Day,
 }
 
 impl Cursor {
@@ -58,6 +69,7 @@ impl Cursor {
             since_ms: self.window.since().map(|since| since.as_millisecond()),
             until_ms: self.window.until().map(|until| until.as_millisecond()),
             position: Some(self.position.into()),
+            oldest_day: self.oldest.to_string(),
         };
         TEXT.encode(&message.encode_to_vec())
     }
@@ -92,6 +104,11 @@ impl Cursor {
         {
             return Err(CursorError::OutOfWindow);
         }
-        Ok(Cursor { window, position })
+        let oldest = message.oldest_day.parse()?;
+        Ok(Cursor {
+            window,
+            position,
+            oldest,
+        })
     }
 }

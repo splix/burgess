@@ -31,7 +31,7 @@ fn page() -> Page {
               "ts": 1793880000005, "kind": "state", "service": "checkout",
               "category": "charge", "meta": {{}},
               "payload_type": "json", "payload": null, "child_subflow": null}}
-        ], "truncated": false}}"#
+        ]}}"#
     ))
     .unwrap()
 }
@@ -83,7 +83,7 @@ fn a_listing_of_a_flow_names_the_flow() {
 fn an_empty_listing_says_so() {
     let empty = Page {
         rows: Vec::new(),
-        truncated: false,
+        cursor: None,
         problems: Vec::new(),
     };
     assert_eq!(
@@ -159,7 +159,7 @@ fn a_complete_page_has_no_notes() {
 #[test]
 fn problems_and_a_cut_page_are_noted() {
     let page = Page {
-        truncated: true,
+        cursor: Some("NEXT".into()),
         problems: vec!["the manifest of 20261105 is invalid: bad frame".into()],
         ..page()
     };

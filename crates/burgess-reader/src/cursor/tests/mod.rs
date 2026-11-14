@@ -31,10 +31,16 @@ fn row() -> RowPosition {
 /// The time of the state in [`ordered`].
 const TS: i64 = 1_794_649_999_000;
 
+/// The oldest day of the walks in the tests, days before [`row`].
+fn oldest() -> Day {
+    Day::try_from(date(2026, 10, 15)).unwrap()
+}
+
 fn unordered(window: Window) -> Cursor {
     Cursor {
         window,
         position: Position::Unordered(row()),
+        oldest: oldest(),
     }
 }
 
@@ -45,6 +51,7 @@ fn ordered(window: Window) -> Cursor {
             ts: UnixMillis::from(TS as u64),
             row: row(),
         },
+        oldest: oldest(),
     }
 }
 
@@ -92,6 +99,7 @@ fn valid_message(request: &impl PagedRequest) -> proto::Cursor {
         since_ms: None,
         until_ms: Some(1_794_650_000_000),
         position: Some(Position::Unordered(row()).into()),
+        oldest_day: oldest().to_string(),
     }
 }
 
@@ -162,8 +170,7 @@ fn a_cursor_is_refused_with_another_request() {
 /// of another build. Thus its text must not change with the build.
 #[test]
 fn a_cursor_has_the_same_text_on_each_build() {
-    const TEXT: &str =
-        "BAARCIB4DMW7SOO7JQMIBXONUKOTIIEASXT4XHJUGIOARGEN47FZ2NASCMFAQMRQGI3DCMJRGQIPXFPHZOOTIGBJ";
+    const TEXT: &str = "BAARCIB4DMW7SOO7JQMIBXONUKOTIIEASXT4XHJUGIOARGEN47FZ2NASCMFAQMRQGI3DCMJRGQIPXFPHZOOTIGBJHIEDEMBSGYYTAMJV";
 
     let cursor = ordered(last_day());
     let request = states_request();
@@ -320,4 +327,19 @@ fn an_ordered_position_out_of_its_window_is_refused() {
     for ts_ms in [ts, ts + 1_000] {
         assert!(decoded(&ordered_at(ts_ms), &request).is_ok(), "{ts_ms}");
     }
+}
+
+/// Without its oldest day, the next page cannot know when retention
+/// deleted a part of the answer.
+#[test]
+fn a_cursor_without_its_oldest_day_is_refused() {
+    let request = states_request();
+    let message = proto::Cursor {
+        oldest_day: String::new(),
+        ..valid_message(&request)
+    };
+    assert!(matches!(
+        decoded(&message, &request),
+        Err(CursorError::Day(_))
+    ));
 }

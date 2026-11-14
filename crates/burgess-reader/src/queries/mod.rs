@@ -5,6 +5,7 @@
 //! JSON page from the same messages. Thus the two transports give the same
 //! rows, limits, problems and errors.
 
+mod continued;
 mod error;
 mod options;
 mod paged;
@@ -15,6 +16,7 @@ pub use error::{RequestError, TimeField};
 
 use std::error::Error;
 use std::fmt::Display;
+use std::sync::Arc;
 
 use burgess_api::grpc::get_tree_request::Tree;
 use burgess_api::grpc::{
@@ -24,6 +26,8 @@ use burgess_core::flow::{FlowId, TreeId};
 use burgess_core::report::error_chain;
 
 use self::options::{PageOptions, PageRequest};
+use crate::cursor::{Cursors, QueryHash, Window};
+use crate::manifests::ManifestCache;
 use crate::pages::PageLimits;
 use crate::refs_lookup::RefsLookup;
 use crate::states_lookup::StatesLookup;
@@ -37,6 +41,9 @@ pub struct Queries {
     pub refs: RefsLookup,
     /// Finds the states of a service and category.
     pub states: StatesLookup,
+    /// The manifests that tell whether the rows of a cursor are still
+    /// stored.
+    pub manifests: Arc<ManifestCache>,
     /// The number of rows that a page can hold.
     pub limits: PageLimits,
 }
@@ -53,8 +60,26 @@ impl Queries {
             None => return Err(RequestError::NoTree),
         };
         let page = PageOptions::from(&request).check(&self.limits)?;
-        let found = self.lookup.tree(tree, page.until).await;
-        Ok(answer(found, page, tree))
+        let continuation = self
+            .continuation(QueryHash::of(&request), request.cursor.as_deref(), || {
+                Ok(Window::new(None, page.until)?)
+            })
+            .await?;
+        // One row more than the page holds tells that the page is cut.
+        let wanted = page.limit.saturating_add(1);
+        let found = self
+            .lookup
+            .tree(
+                tree,
+                continuation.window.until(),
+                continuation.unordered()?,
+                Some(wanted),
+            )
+            .await;
+        // The walk goes oldest day first, thus the rest of the answer
+        // starts on the day of the last row given.
+        let cursors = self.cursors(&continuation, None, false)?;
+        Ok(answer(found, page, &cursors, tree))
     }
 
     /// The messages of the answer to a GetFlow request.
@@ -64,14 +89,32 @@ impl Queries {
     ) -> Result<Vec<GetFlowResponse>, RequestError> {
         let flow = request.flow_id.parse::<FlowId>()?;
         let page = PageOptions::from(&request).check(&self.limits)?;
-        let found = self.lookup.flow(flow, page.until).await;
-        Ok(answer(found, page, flow))
+        let continuation = self
+            .continuation(QueryHash::of(&request), request.cursor.as_deref(), || {
+                Ok(Window::new(None, page.until)?)
+            })
+            .await?;
+        let from = continuation.unordered()?;
+        // The flows below the flow are known only from all splits of the
+        // tree, thus each page reads the whole tree, and skips the rows of
+        // the pages before.
+        let mut found = self.lookup.flow(flow, continuation.window.until()).await;
+        if let Some(from) = from {
+            found.rows.retain(|row| row.position > from);
+        }
+        let cursors = self.cursors(&continuation, found.oldest, false)?;
+        Ok(answer(found, page, &cursors, flow))
     }
 }
 
-fn answer<R: TreeResponse>(found: FoundTree, page: PageRequest, id: impl Display) -> Vec<R> {
+fn answer<R: TreeResponse>(
+    found: FoundTree,
+    page: PageRequest,
+    cursors: &Cursors,
+    id: impl Display,
+) -> Vec<R> {
     log_problems(&found.problems, id);
-    found.into_responses(page.limit)
+    found.into_responses(page.limit, cursors)
 }
 
 /// The log has the problems too: a file that cannot be read is for the
@@ -82,6 +125,9 @@ fn log_problems(problems: &[impl Error + 'static], lookup: impl Display) {
         tracing::warn!(%lookup, problem = %error_chain(problem), "lookup could not read everything");
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 /// `value`, or `None` when it is "". A client that keeps an option in a
 /// string sends "" for no value.

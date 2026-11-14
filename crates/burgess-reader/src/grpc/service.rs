@@ -15,8 +15,8 @@ use tonic::{Request, Response, Status};
 
 use crate::queries::{Queries, RequestError};
 
-/// The messages of one answer. The lookup reads all rows before it cuts the
-/// page, thus the full answer is known before the first message.
+/// The messages of one answer. The lookup reads the rows of the page before
+/// it cuts it, thus the full answer is known before the first message.
 pub type Answer<T> = stream::Iter<std::vec::IntoIter<Result<T, Status>>>;
 
 /// The gRPC service. It sends the answers of the queries as they are.
@@ -67,7 +67,7 @@ impl QueryService for QueryApi {
     }
 }
 
-/// Each request error is a fault of the request.
+/// A request error refuses the request before the first message.
 fn answer<R>(responses: Result<Vec<R>, RequestError>) -> Result<Response<Answer<R>>, Status> {
     let responses = responses.map_err(|error| refusal(&error))?;
     let messages: Vec<_> = responses.into_iter().map(Ok).collect();
@@ -75,7 +75,14 @@ fn answer<R>(responses: Result<Vec<R>, RequestError>) -> Result<Response<Answer<
 }
 
 /// The status of a refused request.
+///
+/// An expired cursor is not a fault of how the request is written, and a
+/// retry gives the same answer. Thus it has a status of its own, and not
+/// UNAVAILABLE, which clients retry and show as a service that is down.
 fn refusal(error: &RequestError) -> Status {
+    if let RequestError::Expired = error {
+        return Status::failed_precondition(error_chain(error));
+    }
     let mut status = Status::invalid_argument(error_chain(error));
     if let RequestError::Where(filter) = error {
         status

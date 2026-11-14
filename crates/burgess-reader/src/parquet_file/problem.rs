@@ -30,6 +30,13 @@ pub enum FileProblem {
         /// Rows the file holds.
         found: i64,
     },
+    /// The decoder gave a row number that no row can have: none, or below
+    /// 0.
+    #[error("the decoder gave the row number {found:?}")]
+    RowNumber {
+        /// The number, if there is one.
+        found: Option<i64>,
+    },
     /// A column the layout requires is absent or has another type.
     #[error("column {column} is missing or has an unexpected type")]
     Column {

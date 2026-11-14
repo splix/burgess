@@ -22,10 +22,11 @@ pub use query::RefsQuery;
 
 use burgess_core::storage::RefRow;
 
+use crate::cursor::Positioned;
 use crate::day_scan::Found;
 
 /// The references a lookup found, and what it could not read.
-pub type FoundRefs = Found<RefRow, RefsLookupError>;
+pub type FoundRefs = Found<Positioned<RefRow>, RefsLookupError>;
 
 #[cfg(test)]
 mod tests;

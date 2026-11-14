@@ -7,6 +7,7 @@ use burgess_api::grpc::{ListRefsRequest, ListRefsResponse};
 use super::error::{RequestError, TimeField};
 use super::options::{PageOptions, time};
 use super::{Queries, log_problems, non_empty};
+use crate::cursor::{QueryHash, Window};
 use crate::refs_file::RefKey;
 use crate::refs_lookup::RefsQuery;
 
@@ -16,6 +17,8 @@ impl Queries {
         &self,
         mut request: ListRefsRequest,
     ) -> Result<Vec<ListRefsResponse>, RequestError> {
+        // Before the fields are taken out of the request.
+        let query = QueryHash::of(&request);
         let key = RefKey::new(
             mem::take(&mut request.ref_type),
             mem::take(&mut request.domain_id),
@@ -30,20 +33,34 @@ impl Queries {
         {
             return Err(RequestError::SinceAfterUntil { since, until });
         }
-        let query = RefsQuery {
+        let continuation = self
+            .continuation(query, request.cursor.as_deref(), || {
+                Ok(Window::new(since, page.until)?)
+            })
+            .await?;
+        let window = continuation.window;
+        let refs = RefsQuery {
             key,
             service: non_empty(request.service),
             category: non_empty(request.category),
-            since,
-            until: page.until,
+            since: window.since(),
+            until: window.until(),
         };
         // One row more than the page holds tells that the page is cut.
-        let found = self.refs.refs(&query, page.limit.saturating_add(1)).await?;
+        let found = self
+            .refs
+            .refs(
+                &refs,
+                continuation.unordered()?,
+                page.limit.saturating_add(1),
+            )
+            .await?;
         // The outside id can be data about a person, thus it is not logged.
         log_problems(
             &found.problems,
-            format_args!("references of type {}", query.key.ref_type()),
+            format_args!("references of type {}", refs.key.ref_type()),
         );
-        Ok(found.into_responses(page.limit))
+        let cursors = self.cursors(&continuation, found.oldest, false)?;
+        Ok(found.into_responses(page.limit, &cursors))
     }
 }

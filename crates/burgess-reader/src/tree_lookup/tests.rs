@@ -13,7 +13,9 @@ use crate::manifests::{ManifestCacheConfig, ManifestReadError};
 use crate::parquet_file::FileProblem;
 use crate::states_file::StatesFileProblem;
 use crate::states_lookup::StatesLookupError;
-use crate::test_support::{Days, at, days_ago, flush, minted_on, noon, state_row, subflows};
+use crate::test_support::{
+    Days, at, days_ago, flush, minted_on, noon, state_row, stored, subflows,
+};
 
 /// `count` rows of `tree` written on `day`, every third a split.
 fn rows(tree: TreeId, day: Day, count: u64) -> Vec<StateRow> {
@@ -35,9 +37,9 @@ impl Days {
         tree: TreeId,
         until: Option<Timestamp>,
     ) -> Vec<StateRow> {
-        let found = self.lookup(config).tree(tree, until).await;
+        let found = self.lookup(config).tree(tree, until, None, None).await;
         assert!(found.problems.is_empty(), "{:?}", found.problems);
-        found.rows
+        stored(&found.rows)
     }
 
     /// Stores a flush of trees minted on later days, so that `day` has
@@ -339,10 +341,10 @@ async fn an_unreadable_manifest_is_reported_and_the_walk_goes_on() {
 
     let found = days
         .lookup(TreeLookupConfig::default())
-        .tree(tree, None)
+        .tree(tree, None, None, None)
         .await;
 
-    assert_eq!(found.rows, of(tree, &[&before, &after]));
+    assert_eq!(stored(&found.rows), of(tree, &[&before, &after]));
     assert!(matches!(
         found.problems.as_slice(),
         [StatesLookupError::Manifest(ManifestReadError::Invalid { day, .. })] if *day == broken
@@ -369,10 +371,10 @@ async fn a_listed_file_that_is_gone_is_reported_and_the_others_are_read() {
 
     let found = days
         .lookup(TreeLookupConfig::default())
-        .tree(tree, None)
+        .tree(tree, None, None, None)
         .await;
 
-    assert_eq!(found.rows, of(tree, &[&kept]));
+    assert_eq!(stored(&found.rows), of(tree, &[&kept]));
     let [StatesLookupError::File(error)] = found.problems.as_slice() else {
         panic!("unexpected problems: {:?}", found.problems);
     };
@@ -414,7 +416,7 @@ async fn a_flow_brings_the_flows_split_below_it_on_later_days() {
         .await;
 
     assert!(found.problems.is_empty(), "{:?}", found.problems);
-    assert_eq!(subflows(&found.rows), [1, 1, 2, 3]);
+    assert_eq!(subflows(&stored(&found.rows)), [1, 1, 2, 3]);
 }
 
 #[tokio::test]
@@ -443,7 +445,7 @@ async fn a_flow_reports_what_the_tree_could_not_read() {
         .flow(FlowId::new(tree, Subflow::from(1)), None)
         .await;
 
-    assert_eq!(subflows(&found.rows), [1]);
+    assert_eq!(subflows(&stored(&found.rows)), [1]);
     assert!(matches!(
         found.problems.as_slice(),
         [StatesLookupError::Manifest(ManifestReadError::Invalid { day, .. })] if *day == broken
@@ -455,6 +457,6 @@ fn a_lookup_can_run_on_any_thread() {
     fn assert_send<T: Send>(_: &T) {}
     let days = Days::new();
     let lookup = days.lookup(TreeLookupConfig::default());
-    let future = lookup.tree(minted_on(days_ago(1), 5), None);
+    let future = lookup.tree(minted_on(days_ago(1), 5), None, None, None);
     assert_send(&future);
 }

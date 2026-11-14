@@ -82,7 +82,8 @@ impl Server {
         let queries = Arc::new(Queries {
             lookup: TreeLookup::new(manifests.clone(), states.clone(), settings.lookup),
             refs: RefsLookup::new(manifests.clone(), refs, settings.refs),
-            states: StatesLookup::new(manifests, states, settings.states),
+            states: StatesLookup::new(manifests.clone(), states, settings.states),
+            manifests,
             limits: settings.pages,
         });
         let router = grpc::router(queries.clone()).merge(rest::router(queries));

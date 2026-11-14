@@ -48,7 +48,7 @@ fn wanted(rows: usize) -> NonZeroUsize {
 
 async fn states(days: &Days, filter: StatesFilter) -> FoundStates {
     days.states_lookup(ScanConfig::default())
-        .states(filter, wanted(100), None)
+        .states(filter, wanted(100), StatesScan::AsRead { from: None })
         .await
 }
 
@@ -57,7 +57,7 @@ fn offsets(found: &FoundStates, day: Day) -> Vec<i64> {
     found
         .rows
         .iter()
-        .map(|row| u64::from(row.time) as i64 - at(day, 0) as i64)
+        .map(|row| u64::from(row.row.time) as i64 - at(day, 0) as i64)
         .collect()
 }
 
@@ -176,11 +176,19 @@ async fn days_before_find_a_state_stored_the_day_before_its_time() {
 
     let without = days
         .states_lookup(with_days_before(0))
-        .states(filter(day, day), wanted(100), None)
+        .states(
+            filter(day, day),
+            wanted(100),
+            StatesScan::AsRead { from: None },
+        )
         .await;
     let with = days
         .states_lookup(with_days_before(1))
-        .states(filter(day, day), wanted(100), None)
+        .states(
+            filter(day, day),
+            wanted(100),
+            StatesScan::AsRead { from: None },
+        )
         .await;
 
     assert_eq!(offsets(&without, day), [] as [i64; 0]);
@@ -277,12 +285,16 @@ async fn the_walk_stops_when_it_has_the_states_wanted() {
             concurrent_files: wanted(1),
             ..ScanConfig::default()
         })
-        .states(filter(old, days_ago(0)), wanted(1), None)
+        .states(
+            filter(old, days_ago(0)),
+            wanted(1),
+            StatesScan::AsRead { from: None },
+        )
         .await;
 
     assert_eq!(found.rows.len(), 1);
     assert_eq!(
-        found.rows[0].tree,
+        found.rows[0].row.tree,
         minted_on(new, 2),
         "the newest flush first"
     );
@@ -357,7 +369,11 @@ async fn ordered(days: &Days, filter: StatesFilter, wanted: usize, order: TsOrde
         concurrent_files: NonZeroUsize::MIN,
         ..ScanConfig::default()
     })
-    .states(filter, self::wanted(wanted), Some(order))
+    .states(
+        filter,
+        self::wanted(wanted),
+        StatesScan::ByTime { order, from: None },
+    )
     .await
 }
 
@@ -464,7 +480,13 @@ async fn states_of_the_same_time_keep_one_order() {
         ],
     )
     .await;
-    let trees = |found: &FoundStates| found.rows.iter().map(|row| row.tree).collect::<Vec<_>>();
+    let trees = |found: &FoundStates| {
+        found
+            .rows
+            .iter()
+            .map(|row| row.row.tree)
+            .collect::<Vec<_>>()
+    };
 
     let first = ordered(&days, filter(day, days_ago(1)), 100, TsOrder::Ascending).await;
     let again = ordered(&days, filter(day, days_ago(1)), 100, TsOrder::Ascending).await;
@@ -495,7 +517,7 @@ async fn states_of_the_same_time_keep_one_order_when_files_are_read_together() {
         found
             .rows
             .into_iter()
-            .map(|row| row.tree)
+            .map(|row| row.row.tree)
             .collect::<Vec<_>>()
     };
 
@@ -505,7 +527,10 @@ async fn states_of_the_same_time_keep_one_order_when_files_are_read_together() {
             .states(
                 filter(day, days_ago(1)),
                 wanted(5),
-                Some(TsOrder::Ascending),
+                StatesScan::ByTime {
+                    order: TsOrder::Ascending,
+                    from: None,
+                },
             )
             .await;
         answers.push(trees(found));

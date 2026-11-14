@@ -3,36 +3,41 @@
 use std::num::NonZeroUsize;
 
 use burgess_api::grpc::list_states_response::Item;
-use burgess_api::grpc::{ListStatesResponse, Problem, Truncated};
+use burgess_api::grpc::{ListStatesResponse, Problem};
 
 use super::cut::Cut;
 use super::row::state_row;
+use crate::cursor::Cursors;
 use crate::states_lookup::FoundStates;
 
 impl FoundStates {
     /// The messages of the answer: the problems of the lookup, then the
-    /// first `limit` states, then `truncated` if more were found.
+    /// first `limit` states, each with the cursor after it, as in a tree
+    /// answer.
     ///
     /// As in a tree answer, a payload problem comes just before the state
     /// that it is about.
-    pub fn into_responses(self, limit: NonZeroUsize) -> Vec<ListStatesResponse> {
-        let cut = Cut::new(&self.problems, self.rows, limit);
-        let mut items: Vec<Item> = cut.problems.into_iter().map(problem).collect();
-        for state in cut.rows {
-            let (row, payload_problem) = state_row(state);
-            items.extend(payload_problem.map(problem));
-            items.push(Item::Row(row));
+    pub fn into_responses(self, limit: NonZeroUsize, cursors: &Cursors) -> Vec<ListStatesResponse> {
+        let cut = Cut::new(&self.problems, self.rows, limit, |state| {
+            cursors.after(state.position, state.row.time)
+        });
+        let mut responses: Vec<ListStatesResponse> =
+            cut.problems.into_iter().map(problem).collect();
+        for (state, cursor) in cut.rows {
+            let (row, payload_problem) = state_row(state.row);
+            responses.extend(payload_problem.map(problem));
+            responses.push(ListStatesResponse {
+                item: Some(Item::Row(row)),
+                cursor,
+            });
         }
-        if cut.truncated {
-            items.push(Item::Truncated(Truncated {}));
-        }
-        items
-            .into_iter()
-            .map(|item| ListStatesResponse { item: Some(item) })
-            .collect()
+        responses
     }
 }
 
-fn problem(message: String) -> Item {
-    Item::Problem(Problem { message })
+fn problem(message: String) -> ListStatesResponse {
+    ListStatesResponse {
+        item: Some(Item::Problem(Problem { message })),
+        cursor: None,
+    }
 }

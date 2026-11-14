@@ -119,10 +119,21 @@ impl Days {
 
     /// The queries over the stored days, with default settings.
     pub(crate) fn queries(&self) -> Queries {
+        self.queries_with(ManifestCacheConfig::default())
+    }
+
+    /// The queries over the stored days, whose lookups share one cache of
+    /// manifests with `config`. A shorter retention is the retention of a
+    /// later day.
+    pub(crate) fn queries_with(&self, config: ManifestCacheConfig) -> Queries {
+        let manifests = Arc::new(ManifestCache::new(self.store.clone(), config));
+        let states = || StatesFileReader::new(self.store.clone(), FileReadConfig::default());
+        let refs = RefsFileReader::new(self.store.clone(), FileReadConfig::default());
         Queries {
-            lookup: self.lookup(TreeLookupConfig::default()),
-            refs: self.refs_lookup(ScanConfig::default()),
-            states: self.states_lookup(ScanConfig::default()),
+            lookup: TreeLookup::new(manifests.clone(), states(), TreeLookupConfig::default()),
+            refs: RefsLookup::new(manifests.clone(), refs, ScanConfig::default()),
+            states: StatesLookup::new(manifests.clone(), states(), ScanConfig::default()),
+            manifests,
             limits: PageLimits::default(),
         }
     }

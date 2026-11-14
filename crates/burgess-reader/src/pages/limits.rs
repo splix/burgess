@@ -6,9 +6,9 @@ use std::num::NonZeroUsize;
 /// it may ask for.
 ///
 /// The maximum bounds the rows a client gets in one response. It does not
-/// bound what a request costs the service: a lookup reads the whole tree
-/// before the page is cut, and rows count the same whatever their payload
-/// size.
+/// bound what a request costs the service: a flow lookup reads the whole
+/// tree before the page is cut, and rows count the same whatever their
+/// payload size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageLimits {
     /// Rows in a page whose request gives no limit.

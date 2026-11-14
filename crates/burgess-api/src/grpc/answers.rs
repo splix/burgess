@@ -13,8 +13,6 @@ pub enum PageItem<R> {
     Row(Result<R, RowConversionError>),
     /// Data that the lookup could not read.
     Problem(String),
-    /// The last message, when more rows exist than the limit.
-    Truncated,
 }
 
 /// A message of an answer that a page can read. Each method has its own
@@ -22,6 +20,8 @@ pub enum PageItem<R> {
 pub trait AnswerMessage {
     /// The row of the page, in the JSON form.
     type Row;
+    /// The cursor after the row of the message, if more rows come after it.
+    fn cursor_after(&self) -> Option<&str>;
     /// The item of the message. `None` for a message kind that is newer
     /// than this version.
     fn into_page_item(self) -> Option<PageItem<Self::Row>>;
@@ -31,21 +31,23 @@ impl<R> Page<R> {
     /// The page that the messages of an answer make, as REST sends it.
     ///
     /// A row that the page cannot hold, or a message of an unknown kind,
-    /// becomes a problem. The other rows are kept.
+    /// becomes a problem. The other rows are kept. The cursor of the page is
+    /// the cursor of the last message, thus a page has no cursor when the
+    /// answer has no more rows.
     pub fn from_responses<M: AnswerMessage<Row = R>>(
         responses: impl IntoIterator<Item = M>,
     ) -> Self {
         let mut page = Page {
             rows: Vec::new(),
-            truncated: false,
+            cursor: None,
             problems: Vec::new(),
         };
         for response in responses {
+            page.cursor = response.cursor_after().map(str::to_string);
             match response.into_page_item() {
                 Some(PageItem::Row(Ok(row))) => page.rows.push(row),
                 Some(PageItem::Row(Err(error))) => page.problems.push(error_chain(&error)),
                 Some(PageItem::Problem(message)) => page.problems.push(message),
-                Some(PageItem::Truncated) => page.truncated = true,
                 None => page
                     .problems
                     .push("a message of an unknown kind was skipped".to_string()),
@@ -58,11 +60,14 @@ impl<R> Page<R> {
 impl AnswerMessage for ListStatesResponse {
     type Row = Row;
 
+    fn cursor_after(&self) -> Option<&str> {
+        self.cursor.as_deref()
+    }
+
     fn into_page_item(self) -> Option<PageItem<Row>> {
         Some(match self.item? {
             list_states_response::Item::Row(row) => PageItem::Row(Row::try_from(row)),
             list_states_response::Item::Problem(problem) => PageItem::Problem(problem.message),
-            list_states_response::Item::Truncated(_) => PageItem::Truncated,
         })
     }
 }
@@ -70,11 +75,14 @@ impl AnswerMessage for ListStatesResponse {
 impl AnswerMessage for ListRefsResponse {
     type Row = RefRow;
 
+    fn cursor_after(&self) -> Option<&str> {
+        self.cursor.as_deref()
+    }
+
     fn into_page_item(self) -> Option<PageItem<RefRow>> {
         Some(match self.item? {
             list_refs_response::Item::Row(row) => PageItem::Row(RefRow::try_from(row)),
             list_refs_response::Item::Problem(problem) => PageItem::Problem(problem.message),
-            list_refs_response::Item::Truncated(_) => PageItem::Truncated,
         })
     }
 }

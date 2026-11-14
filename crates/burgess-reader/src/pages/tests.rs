@@ -10,8 +10,9 @@ use burgess_core::storage::{Day, StateEntry, StateRow};
 use burgess_core::wire;
 
 use super::*;
+use crate::cursor::{Cursor, Cursors, QueryHash, Window};
 use crate::manifests::ManifestReadError;
-use crate::test_support::state_row;
+use crate::test_support::{in_one_file, state_row};
 use crate::tree_lookup::FoundTree;
 
 fn tree() -> TreeId {
@@ -20,9 +21,39 @@ fn tree() -> TreeId {
 
 fn found(rows: Vec<StateRow>) -> FoundTree {
     FoundTree {
-        rows,
-        problems: Vec::new(),
+        rows: in_one_file(rows),
+        ..FoundTree::default()
     }
+}
+
+fn query() -> QueryHash {
+    QueryHash::of(&burgess_api::grpc::GetTreeRequest::default())
+}
+
+fn cursors() -> Cursors {
+    Cursors {
+        query: query(),
+        window: Window::new(None, None).unwrap(),
+        by_time: false,
+        oldest: None,
+    }
+}
+
+fn messages(found: FoundTree, rows: usize) -> Vec<GetTreeResponse> {
+    found.into_responses(limit(rows), &cursors())
+}
+
+/// The row number that the cursor of each message tells, `None` for a
+/// message without a cursor.
+fn cursor_rows(messages: &[GetTreeResponse]) -> Vec<Option<u64>> {
+    messages
+        .iter()
+        .map(|message| {
+            let text = message.cursor.as_deref()?;
+            let cursor = Cursor::decode(text, query()).unwrap();
+            Some(cursor.position.row().index)
+        })
+        .collect()
 }
 
 fn states(count: u32) -> Vec<StateRow> {
@@ -51,8 +82,7 @@ fn with_payload(payload_type: wire::PayloadType, payload: &[u8]) -> StateRow {
 }
 
 fn items(found: FoundTree, rows: usize) -> Vec<TreeItem> {
-    found
-        .into_responses::<GetTreeResponse>(limit(rows))
+    messages(found, rows)
         .into_iter()
         .map(|response| response.into_item().expect("an item"))
         .collect()
@@ -136,20 +166,41 @@ fn a_split_reads_as_the_grpc_row_of_its_parent() {
     assert_eq!(split.child_subflow, 9);
 }
 
+/// Each row has the cursor after it, also the last one, since rows come
+/// after the page.
 #[test]
-fn keeps_the_first_rows_up_to_the_limit_and_says_it_cut() {
-    let items = items(found(states(5)), 3);
+fn keeps_the_first_rows_up_to_the_limit_each_with_the_cursor_after_it() {
+    let messages = messages(found(states(5)), 3);
 
+    assert_eq!(cursor_rows(&messages), [Some(0), Some(1), Some(2)]);
+    let items: Vec<TreeItem> = messages.into_iter().filter_map(|m| m.into_item()).collect();
     assert_eq!(subflows(&items), [0, 1, 2]);
-    assert_eq!(items.last(), Some(&TreeItem::Truncated));
+}
+
+/// The last row of the answer has no cursor, thus a client knows that it
+/// has all rows.
+#[test]
+fn the_last_row_of_the_answer_has_no_cursor() {
+    let messages = messages(found(states(3)), 3);
+
+    assert_eq!(cursor_rows(&messages), [Some(0), Some(1), None]);
 }
 
 #[test]
-fn a_page_with_exactly_the_limit_is_not_truncated() {
-    let items = items(found(states(3)), 3);
+fn a_problem_has_no_cursor() {
+    let mut found = found(states(2));
+    let day: Day = "20261105".parse().unwrap();
+    found.problems.push(
+        ManifestReadError::WrongDay {
+            day,
+            found: day.next().unwrap(),
+        }
+        .into(),
+    );
 
-    assert_eq!(items.len(), 3);
-    assert!(!items.contains(&TreeItem::Truncated));
+    let messages = messages(found, 1);
+
+    assert_eq!(cursor_rows(&messages), [None, Some(0)]);
 }
 
 #[test]

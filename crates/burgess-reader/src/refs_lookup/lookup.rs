@@ -8,6 +8,7 @@ use burgess_core::storage::{Day, FileStats, ObjectName};
 use super::FoundRefs;
 use super::error::UnboundedWalk;
 use super::query::RefsQuery;
+use crate::cursor::RowPosition;
 use crate::day_scan::{DayScan, ScanConfig, days_back, newest_day, oldest_day};
 use crate::manifests::{FlushGroup, ManifestCache};
 use crate::refs_file::RefsFileReader;
@@ -29,17 +30,22 @@ impl RefsLookup {
         }
     }
 
-    /// The references that pass `query`, until `wanted` are found, and what
-    /// could not be read.
+    /// The references that pass `query`, after the row `from` if given,
+    /// until `wanted` are found, and what could not be read.
     ///
     /// The order of the rows is not defined, thus the walk can stop when it
     /// has `wanted` rows. It walks newest first, from the day after `until`,
     /// but not after tomorrow by this host's clock. It stops at the day of
     /// `since`, less the configured days before it, or at the oldest day
     /// kept. A refs file without rows is not opened.
+    ///
+    /// The last of the `wanted` rows only tells that the answer goes on,
+    /// thus a file that cannot be read after the rows before it is left to
+    /// the next page, which reads it again.
     pub async fn refs(
         &self,
         query: &RefsQuery,
+        from: Option<RowPosition>,
         wanted: NonZeroUsize,
     ) -> Result<FoundRefs, UnboundedWalk> {
         let days = self.days(query)?;
@@ -49,11 +55,14 @@ impl RefsLookup {
         };
         let pick =
             |group: &FlushGroup| (group.refs().rows > 0).then(|| (group.refs_file(), group.refs()));
-        let read = |file: ObjectName, stats: FileStats| async move {
-            let rows = self.files.refs(&file, stats, &query.key).await?;
-            Ok(rows.into_iter().filter(|row| query.admits(row)).collect())
+        let read = |file: ObjectName, stats: FileStats, after: Option<u64>| async move {
+            let rows = self.files.refs(&file, stats, &query.key, after).await?;
+            Ok(rows
+                .into_iter()
+                .filter(|row| query.admits(&row.row))
+                .collect())
         };
-        Ok(scan.scan(days, pick, read, wanted).await)
+        Ok(scan.scan(days, from, pick, read, wanted).await)
     }
 
     /// The days to visit, newest first. None when today is a day that a

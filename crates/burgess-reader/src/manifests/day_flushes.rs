@@ -17,6 +17,11 @@ pub struct FlushGroup {
 }
 
 impl FlushGroup {
+    /// The day folder of the files.
+    pub fn day(&self) -> Day {
+        self.day
+    }
+
     /// The flush time by the writer clock, which names both files.
     pub fn nnnn(&self) -> UnixMillis {
         self.entry.nnnn
@@ -111,16 +116,21 @@ impl DayFlushes {
 }
 
 impl From<DayManifest> for DayFlushes {
+    /// The flushes sorted by their flush time, which the writer lists them
+    /// in. A cursor names a flush by that time, thus a walk that continues
+    /// after it relies on this order.
     fn from(manifest: DayManifest) -> Self {
         let day = manifest.day;
+        let mut groups: Vec<FlushGroup> = manifest
+            .entries
+            .into_iter()
+            .map(|entry| FlushGroup { day, entry })
+            .collect();
+        groups.sort_by_key(FlushGroup::nnnn);
         DayFlushes {
             day,
             sealed: manifest.sealed,
-            groups: manifest
-                .entries
-                .into_iter()
-                .map(|entry| FlushGroup { day, entry })
-                .collect(),
+            groups,
         }
     }
 }
@@ -172,6 +182,23 @@ mod tests {
         ]);
         assert_eq!(holding(&day, 3), [1, 3]);
         assert_eq!(holding(&day, 6), [2]);
+    }
+
+    /// A walk that continues after a cursor skips the flushes before the
+    /// flush of the cursor, by flush time.
+    #[test]
+    fn flushes_are_oldest_first_whatever_the_manifest_order() {
+        let day = flushes(vec![
+            entry(3, Some((1, 1))),
+            entry(1, Some((1, 1))),
+            entry(2, Some((1, 1))),
+        ]);
+        let order: Vec<u64> = day
+            .groups()
+            .iter()
+            .map(|group| u64::from(group.nnnn()))
+            .collect();
+        assert_eq!(order, [1, 2, 3]);
     }
 
     #[test]

@@ -28,7 +28,7 @@ use parquet::file::metadata::{KeyValue, PageIndexPolicy, ParquetMetaData, Parque
 use parquet::file::properties::{EnabledStatistics, WriterProperties, WriterPropertiesBuilder};
 
 use super::*;
-use crate::parquet_file::{FileProblem, FileReadConfig};
+use crate::parquet_file::{FileProblem, FileReadConfig, Numbered};
 use crate::test_support::RecordingStore;
 
 const FIRST_MS: u64 = 1_793_000_000_000;
@@ -160,9 +160,10 @@ impl Fixture {
         config: FileReadConfig,
         tree: TreeId,
     ) -> Result<Vec<StateRow>, StatesReadError> {
-        StatesFileReader::new(self.store.clone(), config)
-            .tree(&self.name, self.stats(), tree)
-            .await
+        let rows = StatesFileReader::new(self.store.clone(), config)
+            .tree(&self.name, self.stats(), tree, None)
+            .await?;
+        Ok(rows.into_iter().map(|row| row.row).collect())
     }
 
     async fn read(&self, tree: TreeId) -> Vec<StateRow> {
@@ -616,7 +617,7 @@ async fn a_missing_file_is_a_store_problem() {
         nnnn: UnixMillis::from(FIRST_MS + 1),
     };
     let error = StatesFileReader::new(fixture.store.clone(), FileReadConfig::default())
-        .tree(&gone, fixture.stats(), tree(2))
+        .tree(&gone, fixture.stats(), tree(2), None)
         .await
         .unwrap_err();
     assert!(matches!(
@@ -678,4 +679,5 @@ async fn rejects_a_file_without_the_tree_column() {
     ));
 }
 
+mod numbers;
 mod scan;

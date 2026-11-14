@@ -134,6 +134,7 @@ fn state_message(subflow: u32, payload: &str) -> burgess_api::grpc::ListStatesRe
             payload_type: PayloadType::Json as i32,
             payload: Some(payload.into()),
         })),
+        cursor: None,
     }
 }
 
@@ -295,6 +296,7 @@ async fn references_send_their_filters_and_print_who_recorded_each() {
             subflow,
             ts_ms: 1_793_880_000_000,
         })),
+        cursor: None,
     };
     let service = MockService::start(Answer::Refs(vec![
         reference(1, Some("payment")),

@@ -1,7 +1,7 @@
 //! The messages of an answer of tree rows.
 
 use super::answers::{AnswerMessage, PageItem};
-use super::{GetFlowResponse, GetTreeResponse, Problem, TreeRow, Truncated};
+use super::{GetFlowResponse, GetTreeResponse, Problem, TreeRow};
 use super::{get_flow_response, get_tree_response};
 use crate::Row;
 
@@ -12,16 +12,14 @@ pub enum TreeItem {
     Row(TreeRow),
     /// Data that the lookup could not read.
     Problem(Problem),
-    /// The last message, when more rows exist than the limit.
-    Truncated,
 }
 
 /// A message of an answer of tree rows. GetTree and GetFlow have different
 /// response types with the same content. This trait lets one function make
 /// and read the messages of the two.
 pub trait TreeResponse: AnswerMessage<Row = Row> {
-    /// The message that holds `item`.
-    fn from_item(item: TreeItem) -> Self;
+    /// The message that holds `item`, with the cursor after it.
+    fn from_item(item: TreeItem, cursor: Option<String>) -> Self;
     /// The item of the message. `None` for a message kind that is newer
     /// than this version.
     fn into_item(self) -> Option<TreeItem>;
@@ -32,20 +30,21 @@ pub trait TreeResponse: AnswerMessage<Row = Row> {
 macro_rules! tree_response {
     ($response:ty, $item:ident) => {
         impl TreeResponse for $response {
-            fn from_item(item: TreeItem) -> Self {
+            fn from_item(item: TreeItem, cursor: Option<String>) -> Self {
                 let item = match item {
                     TreeItem::Row(row) => $item::Item::Row(row),
                     TreeItem::Problem(problem) => $item::Item::Problem(problem),
-                    TreeItem::Truncated => $item::Item::Truncated(Truncated {}),
                 };
-                Self { item: Some(item) }
+                Self {
+                    item: Some(item),
+                    cursor,
+                }
             }
 
             fn into_item(self) -> Option<TreeItem> {
                 Some(match self.item? {
                     $item::Item::Row(row) => TreeItem::Row(row),
                     $item::Item::Problem(problem) => TreeItem::Problem(problem),
-                    $item::Item::Truncated(_) => TreeItem::Truncated,
                 })
             }
         }
@@ -53,11 +52,14 @@ macro_rules! tree_response {
         impl AnswerMessage for $response {
             type Row = Row;
 
+            fn cursor_after(&self) -> Option<&str> {
+                self.cursor.as_deref()
+            }
+
             fn into_page_item(self) -> Option<PageItem<Row>> {
                 Some(match self.into_item()? {
                     TreeItem::Row(row) => PageItem::Row(Row::try_from(row)),
                     TreeItem::Problem(problem) => PageItem::Problem(problem.message),
-                    TreeItem::Truncated => PageItem::Truncated,
                 })
             }
         }

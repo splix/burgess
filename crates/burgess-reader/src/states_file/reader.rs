@@ -16,9 +16,12 @@ use parquet::basic::Type as PhysicalType;
 use super::decode::StatesBatch;
 use super::error::{StatesFileProblem, StatesReadError};
 use super::filter::StatesFilter;
+use super::scan_order::{FileKey, ScanOrder};
 use super::stored_state::StoredState;
 use crate::ordering::{Smallest, TsOrder};
-use crate::parquet_file::{ColumnKey, FileProblem, FileReadConfig, OpenFile, leaf_column};
+use crate::parquet_file::{
+    ColumnKey, FileProblem, FileReadConfig, Numbered, OpenFile, leaf_column,
+};
 
 /// Reads the rows of a tree, or the states that pass a filter, out of
 /// states files, one file at a time.
@@ -39,7 +42,7 @@ impl StatesFileReader {
     }
 
     /// Every row of `tree` in the states file `file`, which the manifest
-    /// lists with `stats`.
+    /// lists with `stats`, after the row `after` if given.
     ///
     /// The rows come in `(subflow, ts)` order, the order the file stores
     /// them in, and include splits as well as states, so a caller can follow
@@ -52,15 +55,23 @@ impl StatesFileReader {
         file: &ObjectName,
         stats: FileStats,
         tree: TreeId,
-    ) -> Result<Vec<StateRow>, StatesReadError> {
-        self.read(file, stats, tree)
+        after: Option<u64>,
+    ) -> Result<Vec<Numbered<StateRow>>, StatesReadError> {
+        let mut rows = self
+            .read(file, stats, tree)
             .await
-            .map_err(|problem| StatesReadError::new(file, problem))
+            .map_err(|problem| StatesReadError::new(file, problem))?;
+        // The pages that can hold the tree are read whole, thus the rows up
+        // to `after` are dropped here.
+        if let Some(after) = after {
+            rows.retain(|row| row.number > after);
+        }
+        Ok(rows)
     }
 
     /// The states of `file`, which the manifest lists with `stats`, that
-    /// pass `filter`, up to `limit`: the first ones in the order the file
-    /// stores them, or the first ones in `order`, sorted.
+    /// pass `filter`, up to `limit`: the first ones as `order` tells, after
+    /// the position it gives.
     ///
     /// Splits are not states, thus they are never kept. The payload pages
     /// are fetched only where a row passes the filters on the other columns.
@@ -74,8 +85,8 @@ impl StatesFileReader {
         stats: FileStats,
         filter: &Arc<StatesFilter>,
         limit: NonZeroUsize,
-        order: Option<TsOrder>,
-    ) -> Result<Vec<StoredState>, StatesReadError> {
+        order: ScanOrder,
+    ) -> Result<Vec<Numbered<StoredState>>, StatesReadError> {
         self.scan(file, stats, filter, limit, order)
             .await
             .map_err(|problem| StatesReadError::new(file, problem))
@@ -86,7 +97,7 @@ impl StatesFileReader {
         file: &ObjectName,
         stats: FileStats,
         tree: TreeId,
-    ) -> Result<Vec<StateRow>, StatesFileProblem> {
+    ) -> Result<Vec<Numbered<StateRow>>, StatesFileProblem> {
         let open = self.open(file, stats).await?;
         let keys = [ColumnKey {
             column: tree_column(open.metadata())?,
@@ -108,8 +119,8 @@ impl StatesFileReader {
         stats: FileStats,
         filter: &Arc<StatesFilter>,
         limit: NonZeroUsize,
-        order: Option<TsOrder>,
-    ) -> Result<Vec<StoredState>, StatesFileProblem> {
+        order: ScanOrder,
+    ) -> Result<Vec<Numbered<StoredState>>, StatesFileProblem> {
         let open = self.open(file, stats).await?;
         // The columns are checked before any row is read, thus a file of
         // another layout is a problem whether or not a row passes.
@@ -117,8 +128,10 @@ impl StatesFileReader {
         StatesBatch::try_from(&RecordBatch::new_empty(schema))?;
         let untested = Arc::new(AtomicUsize::new(0));
         let row_filter = filter.row_filter(open.metadata(), &untested);
-        let decoder_limit = order.is_none().then_some(limit);
-        let mut batches = open.filter(row_filter, decoder_limit)?;
+        let mut batches = match order {
+            ScanOrder::InFile { after } => open.filter(row_filter, Some(limit), after)?,
+            ScanOrder::ByTime { .. } => open.filter(row_filter, None, None)?,
+        };
         let mut states = Kept::new(limit, order);
         while let Some(batch) = batches.try_next().await? {
             states.extend(StatesBatch::try_from(&batch)?.states()?);
@@ -139,52 +152,56 @@ impl StatesFileReader {
     }
 }
 
-/// The states that a scan keeps: all, in file order, or the first in an
-/// order, in a heap of the size of the page.
+/// The states that a scan keeps: all, in file order, or the first by time,
+/// in a heap of the size of the page.
 enum Kept {
-    InFileOrder(Vec<StoredState>),
-    /// Each key is the time in the order, then the position in the file,
-    /// thus states of the same time keep their file order.
-    Ordered {
+    InFileOrder(Vec<Numbered<StoredState>>),
+    ByTime {
         order: TsOrder,
-        /// The position in the file of the next state read.
-        position: usize,
-        states: Smallest<(i64, usize), StoredState>,
+        after: Option<FileKey>,
+        states: Smallest<FileKey, Numbered<StoredState>>,
     },
 }
 
 impl Kept {
-    fn new(limit: NonZeroUsize, order: Option<TsOrder>) -> Self {
+    fn new(limit: NonZeroUsize, order: ScanOrder) -> Self {
         match order {
-            None => Kept::InFileOrder(Vec::new()),
-            Some(order) => Kept::Ordered {
+            ScanOrder::InFile { .. } => Kept::InFileOrder(Vec::new()),
+            ScanOrder::ByTime { order, after } => Kept::ByTime {
                 order,
-                position: 0,
+                after,
                 states: Smallest::new(limit),
             },
         }
     }
 
-    fn extend(&mut self, read: Vec<StoredState>) {
+    fn extend(&mut self, read: Vec<Numbered<StoredState>>) {
         match self {
             Kept::InFileOrder(states) => states.extend(read),
-            Kept::Ordered {
+            Kept::ByTime {
                 order,
-                position,
+                after,
                 states,
             } => {
                 for state in read {
-                    states.offer((order.key(state.time), *position), state);
-                    *position += 1;
+                    let key = FileKey {
+                        time: order.key(state.row.time),
+                        row: state.number,
+                    };
+                    // A state that a page gave would take the place of one
+                    // that the next page needs.
+                    if after.is_none_or(|after| key > after) {
+                        states.offer(key, state);
+                    }
                 }
             }
         }
     }
 
-    fn into_states(self) -> Vec<StoredState> {
+    fn into_states(self) -> Vec<Numbered<StoredState>> {
         match self {
             Kept::InFileOrder(states) => states,
-            Kept::Ordered { states, .. } => states.into_sorted(),
+            Kept::ByTime { states, .. } => states.into_sorted(),
         }
     }
 }

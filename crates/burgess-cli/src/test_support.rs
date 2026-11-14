@@ -19,9 +19,9 @@ use crate::server::ServerAddress;
 pub(crate) enum Answer {
     /// The service refuses the request.
     Refuse(Status),
-    /// The service sends these messages, and an error in the list stops
-    /// the stream there.
-    Stream(Vec<Result<TreeItem, Status>>),
+    /// The service sends these messages, each with its cursor, and an
+    /// error in the list stops the stream there.
+    Stream(Vec<Result<(TreeItem, Option<String>), Status>>),
     /// The service answers ListStates with these messages.
     States(Vec<ListStatesResponse>),
     /// The service answers ListRefs with these messages.
@@ -29,9 +29,20 @@ pub(crate) enum Answer {
 }
 
 impl Answer {
-    /// An answer of these items, without an error.
+    /// An answer of these items, without an error, which has no more rows.
     pub(crate) fn items(items: Vec<TreeItem>) -> Self {
-        Answer::Stream(items.into_iter().map(Ok).collect())
+        Answer::Stream(items.into_iter().map(|item| Ok((item, None))).collect())
+    }
+
+    /// An answer of these items that has more rows: its last item has
+    /// `cursor`.
+    pub(crate) fn cut(items: Vec<TreeItem>, cursor: &str) -> Self {
+        let last = items.len().saturating_sub(1);
+        let messages = items.into_iter().enumerate().map(|(index, item)| {
+            let cursor = (index == last).then(|| cursor.to_string());
+            Ok((item, cursor))
+        });
+        Answer::Stream(messages.collect())
     }
 
     /// An answer of these rows only.
@@ -97,7 +108,10 @@ impl Fixed {
             Answer::Stream(items) => {
                 let messages: Vec<_> = items
                     .iter()
-                    .map(|item| item.clone().map(R::from_item))
+                    .map(|item| {
+                        item.clone()
+                            .map(|(item, cursor)| R::from_item(item, cursor))
+                    })
                     .collect();
                 Ok(Response::new(tokio_stream::iter(messages)))
             }

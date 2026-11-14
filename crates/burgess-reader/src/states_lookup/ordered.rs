@@ -4,90 +4,96 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use burgess_core::storage::{FileStats, ObjectName};
-use burgess_core::wire::UnixMillis;
 use futures::StreamExt;
 use futures::stream::FuturesOrdered;
 
+use super::scan::TimeKey;
 use super::{FoundStates, StatesLookup, StatesLookupError};
+use crate::cursor::{Given, Positioned, RowPosition, Walk};
 use crate::day_scan::{DayScan, Found};
 use crate::manifests::FlushGroup;
 use crate::ordering::{Smallest, TsOrder};
-use crate::states_file::{StatesFilter, StoredState};
+use crate::states_file::{FileKey, ScanOrder, StatesFilter, StoredState};
 
 /// A states file that may hold states of the window.
 struct Candidate {
+    group: FlushGroup,
     file: ObjectName,
     stats: FileStats,
-    /// The key in the order of the first state that the file can hold.
-    bound: i64,
-    nnnn: UnixMillis,
+    /// The smallest key that a state of the file can have.
+    first: TimeKey,
 }
 
-/// The keys of the heap: the time in the order, the rank of the file, and
-/// the position in what the file gives.
-type Key = (i64, usize, usize);
+/// The states kept, by their key in the order.
+type Kept = Smallest<TimeKey, Positioned<StoredState>>;
 
 impl StatesLookup {
-    /// The first `wanted` states that pass `filter` in `order`.
+    /// The first `wanted` states that pass `filter` in `order`, after the
+    /// key `from` if given.
     ///
     /// The files are sorted by tree, thus only the time bounds of the
     /// manifest tell which files can hold the first states. A bound is a
     /// limit on each state of its file, thus when no state of a file can be
     /// better than the worst state kept, the files after it are not read.
-    ///
-    /// States of the same time are in the order of the files, then in their
-    /// order in a file, thus the same request gives the same order.
     pub(super) async fn ordered(
         &self,
         filter: Arc<StatesFilter>,
         wanted: NonZeroUsize,
         order: TsOrder,
+        from: Option<TimeKey>,
     ) -> FoundStates {
+        let filter = match from {
+            Some(from) => continued(&filter, order, from),
+            None => filter,
+        };
         let scan = DayScan {
             manifests: &self.manifests,
             config: self.config,
         };
         let pick = |group: &FlushGroup| candidate(group, &filter, order);
+        let days = self.days(&filter);
+        let oldest = days.last().copied();
         let (mut candidates, mut problems): (Vec<Candidate>, Vec<StatesLookupError>) =
-            scan.picked(self.days(&filter), pick).await;
-        candidates.sort_by_key(|candidate| (candidate.bound, candidate.nnnn));
-        let read = |rank: usize, candidate: Candidate, filter: Arc<StatesFilter>| async move {
+            scan.picked(days, pick).await;
+        candidates.sort_by_key(|candidate| candidate.first);
+        let read = |candidate: Candidate, filter: Arc<StatesFilter>| async move {
+            let after = from.and_then(|from| after_in(&candidate.group, from));
+            let order = ScanOrder::ByTime { order, after };
             let read = self
                 .files
-                .states(
-                    &candidate.file,
-                    candidate.stats,
-                    &filter,
-                    wanted,
-                    Some(order),
-                )
+                .states(&candidate.file, candidate.stats, &filter, wanted, order)
                 .await;
-            (rank, candidate.bound, read)
+            (candidate, read)
         };
-        let mut candidates = candidates.into_iter().enumerate().peekable();
-        // Reads finish in the order they start, thus the states of the same
-        // time come in the order of the files.
+        let mut candidates = candidates.into_iter().peekable();
         let mut reads = FuturesOrdered::new();
-        let mut kept: Smallest<Key, StoredState> = Smallest::new(wanted);
+        let mut kept: Kept = Smallest::new(wanted);
         loop {
             while reads.len() < self.config.concurrent_files.get()
-                && let Some((rank, candidate)) =
-                    candidates.next_if(|(_, candidate)| may_improve(&kept, candidate.bound))
+                && let Some(candidate) =
+                    candidates.next_if(|candidate| may_improve(&kept, candidate.first))
             {
                 let filter = narrowed(&filter, &kept, order);
-                reads.push_back(read(rank, candidate, filter));
+                reads.push_back(read(candidate, filter));
             }
-            let Some((rank, bound, read)) = reads.next().await else {
+            let Some((candidate, read)) = reads.next().await else {
                 break;
             };
-            // The heap can fill while the file is read.
-            if !may_improve(&kept, bound) {
+            // The heap can fill while the file is read. Then no state of the
+            // file is on this page, and neither is a problem of its read:
+            // the next page reads the file again and reports it there.
+            if !may_improve(&kept, candidate.first) {
                 continue;
             }
             match read {
                 Ok(states) => {
-                    for (position, state) in states.into_iter().enumerate() {
-                        kept.offer((order.key(state.time), rank, position), state);
+                    for state in states {
+                        let state = Positioned::in_flush(&candidate.group, state);
+                        let key = TimeKey {
+                            time: order.key(state.row.time),
+                            row: state.position,
+                        };
+                        kept.offer(key, state);
                     }
                 }
                 Err(error) => problems.push(error.into()),
@@ -96,35 +102,60 @@ impl StatesLookup {
         Found {
             rows: kept.into_sorted(),
             problems,
+            oldest,
         }
     }
 }
 
-/// Whether a file whose states have keys of at least `bound` can hold a
-/// state that the heap keeps. A state of the same key as the worst kept
-/// comes after it, since it is in a later file.
-fn may_improve(kept: &Smallest<Key, StoredState>, bound: i64) -> bool {
-    kept.bar().is_none_or(|&(bar, _, _)| bound < bar)
+/// Whether a file whose states have keys of at least `first` can hold a
+/// state that the heap keeps.
+fn may_improve(kept: &Kept, first: TimeKey) -> bool {
+    kept.bar().is_none_or(|&bar| first < bar)
 }
 
 /// `filter`, with its window cut at the time of the worst state kept when
 /// the heap is full. A state after it cannot be kept, thus the row filter
 /// drops it before its payload is read.
-fn narrowed(
-    filter: &Arc<StatesFilter>,
-    kept: &Smallest<Key, StoredState>,
-    order: TsOrder,
-) -> Arc<StatesFilter> {
-    let Some(&(bar, _, _)) = kept.bar() else {
+fn narrowed(filter: &Arc<StatesFilter>, kept: &Kept, order: TsOrder) -> Arc<StatesFilter> {
+    let Some(bar) = kept.bar() else {
         return Arc::clone(filter);
     };
-    let worst = order.time(bar);
+    let worst = order.time(bar.time);
     let mut narrowed = StatesFilter::clone(filter);
     match order {
         TsOrder::Ascending => narrowed.until = narrowed.until.min(worst),
         TsOrder::Descending => narrowed.since = narrowed.since.max(worst),
     }
     Arc::new(narrowed)
+}
+
+/// `filter`, with its window starting at the time of `from`, the last
+/// state that a page gave. A state before it was on a page before.
+fn continued(filter: &Arc<StatesFilter>, order: TsOrder, from: TimeKey) -> Arc<StatesFilter> {
+    let last = order.time(from.time);
+    let mut continued = StatesFilter::clone(filter);
+    match order {
+        TsOrder::Ascending => continued.since = continued.since.max(last),
+        TsOrder::Descending => continued.until = continued.until.min(last),
+    }
+    Arc::new(continued)
+}
+
+/// The key in a file of `group` after which its states come after `from`.
+///
+/// States of the time of `from` come after it only in a later file, or
+/// later in its own file. `None` when each state of the window comes after
+/// it, as the window starts at that time.
+fn after_in(group: &FlushGroup, from: TimeKey) -> Option<FileKey> {
+    let row = match Given::of(group, from.row, Walk::OldestFirst) {
+        Given::All => u64::MAX,
+        Given::UpTo(index) => index,
+        Given::Nothing => return None,
+    };
+    Some(FileKey {
+        time: from.time,
+        row,
+    })
 }
 
 /// `group` as a candidate, if its states file may hold states of the
@@ -139,10 +170,13 @@ fn candidate(group: &FlushGroup, filter: &StatesFilter, order: TsOrder) -> Optio
         TsOrder::Descending => bounds.max_ts,
     };
     Some(Candidate {
+        group: group.clone(),
         file: group.states_file(),
         stats: group.states(),
-        bound: order.key(first),
-        nnnn: group.nnnn(),
+        first: TimeKey {
+            time: order.key(first),
+            row: RowPosition::first_in(group),
+        },
     })
 }
 
@@ -151,8 +185,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     use burgess_core::flow::{Subflow, TreeId};
-    use burgess_core::wire::PayloadType;
+    use burgess_core::wire::{PayloadType, UnixMillis};
     use jiff::Timestamp;
+
+    use crate::test_support::days_ago;
 
     use super::*;
 
@@ -172,10 +208,15 @@ mod tests {
     }
 
     /// A heap of `size` that holds states at `times`.
-    fn kept_at(order: TsOrder, size: usize, times: &[u64]) -> Smallest<Key, StoredState> {
+    fn kept_at(order: TsOrder, size: usize, times: &[u64]) -> Kept {
         let mut kept = Smallest::new(NonZeroUsize::new(size).unwrap());
-        for (position, &time) in times.iter().enumerate() {
-            let state = StoredState {
+        for (index, &time) in times.iter().enumerate() {
+            let position = RowPosition {
+                day: days_ago(0),
+                nnnn: UnixMillis::from(1),
+                index: index as u64,
+            };
+            let row = StoredState {
                 tree: TreeId::from([1; 12]),
                 subflow: Subflow::ROOT,
                 time: UnixMillis::from(time),
@@ -185,7 +226,11 @@ mod tests {
                 payload_type: PayloadType::Json,
                 payload: b"{}".to_vec(),
             };
-            kept.offer((order.key(state.time), 0, position), state);
+            let key = TimeKey {
+                time: order.key(row.time),
+                row: position,
+            };
+            kept.offer(key, Positioned { position, row });
         }
         kept
     }

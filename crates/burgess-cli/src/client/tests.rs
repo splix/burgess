@@ -101,20 +101,22 @@ async fn asks_for_a_flow_without_options() {
 
 #[tokio::test]
 async fn problems_and_a_cut_reach_the_page() {
-    let service = MockService::start(Answer::items(vec![
-        TreeItem::Problem(Problem {
-            message: "the manifest of 20261105 is invalid".into(),
-        }),
-        TreeItem::Row(state()),
-        TreeItem::Truncated,
-    ]))
+    let service = MockService::start(Answer::cut(
+        vec![
+            TreeItem::Problem(Problem {
+                message: "the manifest of 20261105 is invalid".into(),
+            }),
+            TreeItem::Row(state()),
+        ],
+        "NEXT",
+    ))
     .await;
 
     let page = client(&service).tree(tree(no_options())).await.unwrap();
 
     assert_eq!(page.problems, ["the manifest of 20261105 is invalid"]);
     assert_eq!(page.rows.len(), 1);
-    assert!(page.truncated);
+    assert_eq!(page.cursor.as_deref(), Some("NEXT"));
 }
 
 #[tokio::test]
@@ -145,7 +147,7 @@ async fn an_empty_message_says_there_was_no_message() {
 #[tokio::test]
 async fn an_answer_that_stops_early_keeps_its_rows_and_tells_why() {
     let service = MockService::start(Answer::Stream(vec![
-        Ok(TreeItem::Row(state())),
+        Ok((TreeItem::Row(state()), None)),
         Err(Status::internal("the disk is gone")),
     ]))
     .await;

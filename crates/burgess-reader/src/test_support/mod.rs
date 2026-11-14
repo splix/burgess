@@ -70,6 +70,27 @@ pub(crate) fn state_with_payload(
     row
 }
 
+/// `rows` as a lookup finds them in one file of today, in their order.
+pub(crate) fn in_one_file<T>(rows: Vec<T>) -> Vec<crate::cursor::Positioned<T>> {
+    let day = days_ago(0);
+    rows.into_iter()
+        .zip(0..)
+        .map(|(row, index)| crate::cursor::Positioned {
+            position: crate::cursor::RowPosition {
+                day,
+                nnnn: UnixMillis::from(1),
+                index,
+            },
+            row,
+        })
+        .collect()
+}
+
+/// The rows of `found`, without where they are stored.
+pub(crate) fn stored<T: Clone>(found: &[crate::cursor::Positioned<T>]) -> Vec<T> {
+    found.iter().map(|found| found.row.clone()).collect()
+}
+
 /// The subflow of each row, in order.
 pub(crate) fn subflows(rows: &[StateRow]) -> Vec<u32> {
     rows.iter().map(|row| u32::from(row.subflow)).collect()

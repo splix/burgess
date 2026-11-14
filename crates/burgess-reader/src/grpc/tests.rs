@@ -6,8 +6,9 @@ use std::sync::Arc;
 use burgess_api::grpc::get_tree_request::Tree;
 use burgess_api::grpc::query_service_server::QueryService;
 use burgess_api::grpc::{
-    GetFlowRequest, GetTreeRequest, ListRefsRequest, ListStatesRequest, Order, PayloadType,
-    get_flow_response, get_tree_response::Item, list_refs_response, list_states_response,
+    AnswerMessage, GetFlowRequest, GetTreeRequest, ListRefsRequest, ListStatesRequest,
+    ListStatesResponse, Order, PayloadType, get_flow_response, get_tree_response::Item,
+    list_refs_response, list_states_response,
 };
 use burgess_api::{Row, RowKind};
 use burgess_core::flow::{FlowId, Subflow, TreeId};
@@ -84,7 +85,6 @@ async fn flow(days: &Days, request: GetFlowRequest) -> Vec<Item> {
         .map(|message| match message.item.expect("an item") {
             get_flow_response::Item::Row(row) => Item::Row(row),
             get_flow_response::Item::Problem(problem) => Item::Problem(problem),
-            get_flow_response::Item::Truncated(truncated) => Item::Truncated(truncated),
         })
         .collect()
 }
@@ -104,6 +104,15 @@ fn subflows(items: &[Item]) -> Vec<u32> {
         .iter()
         .map(|row| u32::from(row.subflow))
         .collect()
+}
+
+/// Whether the answer tells that rows come after it: its last row has a
+/// cursor.
+async fn has_more<R: AnswerMessage>(answer: Result<tonic::Response<Answer<R>>, Status>) -> bool {
+    messages(answer)
+        .await
+        .last()
+        .is_some_and(|message| message.cursor_after().is_some())
 }
 
 fn refused<T: std::fmt::Debug>(answer: Result<T, Status>) -> String {
@@ -257,36 +266,34 @@ async fn an_until_on_no_day_is_refused() {
 }
 
 #[tokio::test]
-async fn a_limit_ends_the_answer_with_a_message_that_tells_it_was_cut() {
+async fn a_limit_ends_the_answer_with_a_row_that_has_a_cursor() {
     let (days, tree) = one_tree().await;
+    let tree_request = GetTreeRequest {
+        limit: Some(2),
+        ..tree_request(tree)
+    };
+    let flow_request = GetFlowRequest {
+        limit: Some(1),
+        ..flow_request(tree, 1)
+    };
 
-    let tree_items = self::tree(
-        &days,
-        GetTreeRequest {
-            limit: Some(2),
-            ..tree_request(tree)
-        },
-    )
-    .await;
-    let flow_items = flow(
-        &days,
-        GetFlowRequest {
-            limit: Some(1),
-            ..flow_request(tree, 1)
-        },
-    )
-    .await;
+    let tree_items = self::tree(&days, tree_request.clone()).await;
+    let flow_items = flow(&days, flow_request.clone()).await;
 
     assert_eq!(subflows(&tree_items), [0, 0]);
-    assert!(
-        matches!(tree_items.last(), Some(Item::Truncated(_))),
-        "{tree_items:?}"
-    );
     assert_eq!(subflows(&flow_items), [1]);
-    assert!(
-        matches!(flow_items.last(), Some(Item::Truncated(_))),
-        "{flow_items:?}"
-    );
+    let api = api(&days);
+    assert!(has_more(api.get_tree(Request::new(tree_request)).await).await);
+    assert!(has_more(api.get_flow(Request::new(flow_request)).await).await);
+}
+
+#[tokio::test]
+async fn a_whole_answer_ends_with_a_row_without_a_cursor() {
+    let (days, tree) = one_tree().await;
+    let api = api(&days);
+
+    assert!(!has_more(api.get_tree(Request::new(tree_request(tree))).await).await);
+    assert!(!has_more(api.get_flow(Request::new(flow_request(tree, 1))).await).await);
 }
 
 #[tokio::test]
@@ -312,7 +319,7 @@ async fn a_limit_the_service_does_not_serve_is_refused() {
 }
 
 #[tokio::test]
-async fn an_order_or_a_cursor_is_refused_for_a_tree() {
+async fn an_order_or_an_invalid_cursor_is_refused_for_a_tree() {
     let (days, tree) = one_tree().await;
     let options = [
         (
@@ -324,7 +331,7 @@ async fn an_order_or_a_cursor_is_refused_for_a_tree() {
         (
             Order::Unspecified as i32,
             Some("AAAA".to_string()),
-            "cursors are not served yet",
+            "invalid cursor",
         ),
         (
             Order::TsAscending as i32,
@@ -514,7 +521,7 @@ async fn a_payload_that_is_not_json_comes_with_a_problem_before_its_state() {
 }
 
 #[tokio::test]
-async fn a_limit_ends_the_states_with_a_message_that_tells_they_were_cut() {
+async fn a_limit_ends_the_states_with_a_row_that_has_a_cursor() {
     let ms = before_now(SignedDuration::from_hours(1));
     let tree = minted_on(days_ago(0), 5);
     let days = Days::new();
@@ -524,20 +531,15 @@ async fn a_limit_ends_the_states_with_a_message_that_tells_they_were_cut() {
     )
     .await;
 
-    let items = states(
-        &days,
-        ListStatesRequest {
-            limit: Some(2),
-            ..states_request()
-        },
-    )
-    .await;
+    let request = ListStatesRequest {
+        limit: Some(2),
+        ..states_request()
+    };
+    let more = has_more(api(&days).list_states(Request::new(request.clone())).await).await;
+    let items = states(&days, request).await;
 
     assert_eq!(state_times(&items).len(), 2);
-    assert!(
-        matches!(items.last(), Some(list_states_response::Item::Truncated(_))),
-        "{items:?}"
-    );
+    assert!(more, "{items:?}");
 }
 
 #[tokio::test]
@@ -591,24 +593,27 @@ async fn the_limit_counts_the_states_that_pass_where() {
     )
     .await;
 
-    let items = states(
-        &days,
-        ListStatesRequest {
+    let answer = api(&days)
+        .list_states(Request::new(ListStatesRequest {
             r#where: Some("n >= 2".into()),
             limit: Some(1),
             ..states_request()
-        },
-    )
-    .await;
+        }))
+        .await;
+    let messages = messages(answer).await;
 
     let [
-        list_states_response::Item::Row(row),
-        list_states_response::Item::Truncated(_),
-    ] = items.as_slice()
+        ListStatesResponse {
+            item: Some(list_states_response::Item::Row(row)),
+            cursor,
+        },
+    ] = messages.as_slice()
     else {
-        panic!("one row, then truncated: {items:?}");
+        panic!("one row: {messages:?}");
     };
     assert_eq!(row.subflow, 2);
+    // Subflow 3 passes too, thus the page is cut.
+    assert!(cursor.is_some(), "the page must tell that more rows exist");
 }
 
 #[tokio::test]
@@ -695,7 +700,7 @@ async fn a_states_request_the_service_cannot_serve_is_refused() {
                 cursor: Some("next".into()),
                 ..states_request()
             },
-            "cursors are not served yet",
+            "invalid cursor: the cursor is not base32 text",
         ),
         (
             ListStatesRequest {
@@ -818,23 +823,18 @@ async fn references_answer_with_a_message_per_reference() {
 }
 
 #[tokio::test]
-async fn a_limit_ends_the_references_with_a_message_that_tells_they_were_cut() {
+async fn a_limit_ends_the_references_with_a_row_that_has_a_cursor() {
     let (days, _, _) = some_references().await;
 
-    let items = refs(
-        &days,
-        ListRefsRequest {
-            limit: Some(2),
-            ..refs_request("ORD-1")
-        },
-    )
-    .await;
+    let request = ListRefsRequest {
+        limit: Some(2),
+        ..refs_request("ORD-1")
+    };
+    let more = has_more(api(&days).list_refs(Request::new(request.clone())).await).await;
+    let items = refs(&days, request).await;
 
-    assert_eq!(items.len(), 3, "{items:?}");
-    assert!(
-        matches!(items.last(), Some(list_refs_response::Item::Truncated(_))),
-        "{items:?}"
-    );
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert!(more, "{items:?}");
 }
 
 #[tokio::test]

@@ -128,7 +128,7 @@ async fn states_can_be_ordered_by_time_both_ways() {
 
     assert_eq!(amounts(&ascending), [0, 10, 20, 30]);
     assert_eq!(amounts(&descending), [30, 20]);
-    assert_eq!(descending["truncated"], true);
+    assert!(descending["cursor"].is_string(), "{descending}");
 }
 
 #[tokio::test]

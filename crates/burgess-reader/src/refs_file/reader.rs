@@ -12,7 +12,9 @@ use parquet::basic::Type as PhysicalType;
 use super::decode::RefsBatch;
 use super::error::{RefsFileProblem, RefsReadError};
 use super::key::RefKey;
-use crate::parquet_file::{ColumnKey, FileProblem, FileReadConfig, OpenFile, leaf_column};
+use crate::parquet_file::{
+    ColumnKey, FileProblem, FileReadConfig, Numbered, OpenFile, leaf_column,
+};
 
 /// Reads the references of outside ids out of refs files, one file at a
 /// time.
@@ -31,7 +33,8 @@ impl RefsFileReader {
     }
 
     /// All references to `key` in the refs file `file`, which the manifest
-    /// lists with `stats`, in the order the file stores them.
+    /// lists with `stats`, in the order the file stores them, after the row
+    /// `after` if given.
     ///
     /// When the bounds of the key columns rule out the key, the read gets
     /// only the tail of the file.
@@ -40,10 +43,18 @@ impl RefsFileReader {
         file: &ObjectName,
         stats: FileStats,
         key: &RefKey,
-    ) -> Result<Vec<RefRow>, RefsReadError> {
-        self.read(file, stats, key)
+        after: Option<u64>,
+    ) -> Result<Vec<Numbered<RefRow>>, RefsReadError> {
+        let mut rows = self
+            .read(file, stats, key)
             .await
-            .map_err(|problem| RefsReadError::new(file, problem))
+            .map_err(|problem| RefsReadError::new(file, problem))?;
+        // The pages that can hold the key are read whole, thus the rows up
+        // to `after` are dropped here.
+        if let Some(after) = after {
+            rows.retain(|row| row.number > after);
+        }
+        Ok(rows)
     }
 
     async fn read(
@@ -51,7 +62,7 @@ impl RefsFileReader {
         file: &ObjectName,
         stats: FileStats,
         key: &RefKey,
-    ) -> Result<Vec<RefRow>, RefsFileProblem> {
+    ) -> Result<Vec<Numbered<RefRow>>, RefsFileProblem> {
         let store = Arc::clone(&self.store);
         let tail_bytes = self.config.refs_tail_bytes.get();
         let open = OpenFile::open(store, file, stats, tail_bytes).await?;

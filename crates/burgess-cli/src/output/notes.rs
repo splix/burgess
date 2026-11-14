@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use burgess_api::Page;
 
 /// Says on `err` why rows may be missing: each problem the service met, and
-/// whether the page was cut at its limit.
+/// whether more rows come after the page.
 pub fn write_notes<R>(page: &Page<R>, err: &mut dyn Write) -> io::Result<()> {
     for problem in &page.problems {
         writeln!(err, "problem: {problem}")?;
@@ -16,7 +16,7 @@ pub fn write_notes<R>(page: &Page<R>, err: &mut dyn Write) -> io::Result<()> {
             "the service could not read everything; rows or payloads may be missing"
         )?;
     }
-    if page.truncated {
+    if page.cursor.is_some() {
         writeln!(
             err,
             "more rows exist than the {} shown; a larger --limit, up to the service's maximum, shows more",

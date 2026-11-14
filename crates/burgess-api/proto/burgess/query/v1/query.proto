@@ -5,6 +5,12 @@ package burgess.query.v1;
 // Each method streams one row per message and stops after the limit. A
 // lookup continues past a day or a file that it cannot read, thus a stream
 // can also have problems, which tell which rows can be missing.
+//
+// Each row message has a cursor, except the last row of the answer. To get
+// the rows after a row, send the same request again with its cursor. When
+// retention deleted rows that the rest of the answer holds, the cursor is
+// refused with FAILED_PRECONDITION; start again without a cursor. A problem
+// is on the page whose rows it can hide.
 service QueryService {
   // All rows of a tree: states and splits.
   rpc GetTree(GetTreeRequest) returns (stream GetTreeResponse);
@@ -37,7 +43,9 @@ message GetTreeRequest {
   // The order of the rows. Only ListStates serves an order; other values
   // than ORDER_UNSPECIFIED are refused.
   Order order = 4;
-  // The position to continue from. Not served at this time.
+  // The cursor of the last row received, to get the rows after it. The
+  // request must be the same as the one that gave the cursor; only the
+  // limit can change.
   optional string cursor = 5;
 }
 
@@ -134,9 +142,10 @@ message GetTreeResponse {
     TreeRow row = 1;
     // Data that the lookup could not read.
     Problem problem = 2;
-    // The last message, when more rows exist than the limit.
-    Truncated truncated = 3;
   }
+  // The cursor after the row of this message, to get the rows after it.
+  // Not set on the last row of the answer, and on a problem.
+  optional string cursor = 3;
 }
 
 // One message of the GetFlow answer.
@@ -147,9 +156,10 @@ message GetFlowResponse {
     TreeRow row = 1;
     // Data that the lookup could not read.
     Problem problem = 2;
-    // The last message, when more rows exist than the limit.
-    Truncated truncated = 3;
   }
+  // The cursor after the row of this message, to get the rows after it.
+  // Not set on the last row of the answer, and on a problem.
+  optional string cursor = 3;
 }
 
 // One message of the ListStates answer.
@@ -160,9 +170,10 @@ message ListStatesResponse {
     StateRow row = 1;
     // Data that the lookup could not read.
     Problem problem = 2;
-    // The last message, when more states exist than the limit.
-    Truncated truncated = 3;
   }
+  // The cursor after the row of this message, to get the rows after it.
+  // Not set on the last row of the answer, and on a problem.
+  optional string cursor = 3;
 }
 
 // One message of the ListRefs answer.
@@ -173,9 +184,10 @@ message ListRefsResponse {
     RefRow row = 1;
     // Data that the lookup could not read.
     Problem problem = 2;
-    // The last message, when more references exist than the limit.
-    Truncated truncated = 3;
   }
+  // The cursor after the row of this message, to get the rows after it.
+  // Not set on the last row of the answer, and on a problem.
+  optional string cursor = 3;
 }
 
 // A row of a tree: a state, or a split that started a child flow. The two
@@ -277,10 +289,3 @@ message Problem {
   // The cause, as text to show to a person.
   string message = 1;
 }
-
-// The last message when more rows exist than the limit.
-//
-// This is temporary, until answers have cursors: a message with a cursor
-// will tell the same. Then reserve the field number of `truncated`. Do not
-// use it again.
-message Truncated {}

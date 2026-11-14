@@ -12,9 +12,10 @@ pub struct Page<R = Row> {
     /// The rows, in the order the lookup read them, or in the order asked
     /// for.
     pub rows: Vec<R>,
-    /// Whether the lookup found more rows than the request's limit, so some
-    /// were left out. There is no way yet to ask for the rest.
-    pub truncated: bool,
+    /// The cursor to get the rows after this page: send the same request
+    /// again with it. Not set on the last page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
     /// Why some rows may be missing or incomplete: a day or a file that
     /// could not be read, or a payload that could not be embedded. A lookup
     /// returns what it could still find, so an investigation is not stopped

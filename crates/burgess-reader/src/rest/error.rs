@@ -82,6 +82,8 @@ impl RequestError {
             RequestError::Unreadable { status, .. } => *status,
             RequestError::NoRoute => StatusCode::NOT_FOUND,
             RequestError::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
+            // The page that the cursor continues is gone for good.
+            RequestError::Lookup(queries::RequestError::Expired) => StatusCode::GONE,
             _ => StatusCode::BAD_REQUEST,
         }
     }

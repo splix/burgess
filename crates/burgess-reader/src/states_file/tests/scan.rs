@@ -56,15 +56,16 @@ impl Fixture {
         config: FileReadConfig,
         filter: StatesFilter,
     ) -> Result<Vec<StoredState>, StatesReadError> {
-        StatesFileReader::new(self.store.clone(), config)
+        let states = StatesFileReader::new(self.store.clone(), config)
             .states(
                 &self.name,
                 self.stats(),
                 &Arc::new(filter),
                 NonZeroUsize::MAX,
-                None,
+                ScanOrder::InFile { after: None },
             )
-            .await
+            .await?;
+        Ok(states.into_iter().map(|state| state.row).collect())
     }
 
     async fn scan(&self, filter: StatesFilter) -> Vec<StoredState> {
@@ -74,13 +75,26 @@ impl Fixture {
     }
 
     async fn scan_up_to(&self, filter: StatesFilter, limit: usize) -> Vec<StoredState> {
+        self.scan_numbered(filter, limit, ScanOrder::InFile { after: None })
+            .await
+            .into_iter()
+            .map(|state| state.row)
+            .collect()
+    }
+
+    pub(super) async fn scan_numbered(
+        &self,
+        filter: StatesFilter,
+        limit: usize,
+        order: ScanOrder,
+    ) -> Vec<Numbered<StoredState>> {
         StatesFileReader::new(self.store.clone(), self.tail_only_config())
             .states(
                 &self.name,
                 self.stats(),
                 &Arc::new(filter),
                 NonZeroUsize::new(limit).unwrap(),
-                None,
+                order,
             )
             .await
             .unwrap()

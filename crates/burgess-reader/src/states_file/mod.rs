@@ -16,12 +16,14 @@ mod decode;
 mod error;
 mod filter;
 mod reader;
+mod scan_order;
 mod stored_state;
 
 pub use decode::InvalidRow;
 pub use error::{StatesFileProblem, StatesReadError};
 pub use filter::StatesFilter;
 pub use reader::StatesFileReader;
+pub use scan_order::{FileKey, ScanOrder};
 pub use stored_state::StoredState;
 
 #[cfg(test)]

@@ -19,8 +19,8 @@ impl FoundTree {
     /// have held rows of these flows, or a split leading to more of them.
     pub fn subtree(mut self, top: Subflow) -> FoundTree {
         if !top.is_root() {
-            let flows = SplitLinks::of(&self.rows).below(top);
-            self.rows.retain(|row| flows.contains(&row.subflow));
+            let flows = SplitLinks::of(self.rows.iter().map(|row| &row.row)).below(top);
+            self.rows.retain(|row| flows.contains(&row.row.subflow));
         }
         self
     }
@@ -30,7 +30,7 @@ impl FoundTree {
 struct SplitLinks(HashMap<Subflow, Vec<Subflow>>);
 
 impl SplitLinks {
-    fn of(rows: &[StateRow]) -> Self {
+    fn of<'a>(rows: impl Iterator<Item = &'a StateRow>) -> Self {
         let mut links: HashMap<Subflow, Vec<Subflow>> = HashMap::new();
         for row in rows {
             if let StateEntry::Split { child } = &row.entry {
@@ -67,7 +67,7 @@ mod tests {
     use burgess_core::flow::TreeId;
 
     use super::*;
-    use crate::test_support::{state_row, subflows};
+    use crate::test_support::{in_one_file, state_row, stored, subflows};
 
     /// Builds the rows of one tree in the order they are added, each a
     /// millisecond after the one before.
@@ -92,14 +92,14 @@ mod tests {
 
         fn found(self) -> FoundTree {
             FoundTree {
-                rows: self.0,
-                problems: Vec::new(),
+                rows: in_one_file(self.0),
+                ..FoundTree::default()
             }
         }
     }
 
     fn subtree(rows: Rows, top: u32) -> Vec<u32> {
-        subflows(&rows.found().subtree(Subflow::from(top)).rows)
+        subflows(&stored(&rows.found().subtree(Subflow::from(top)).rows))
     }
 
     /// The root splits off 1 and 4, 1 splits off 2, and 2 splits off 3.

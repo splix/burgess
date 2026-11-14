@@ -19,6 +19,7 @@ pub(super) struct PageParams {
     limit: Option<LimitValue>,
     /// Taken so that the lookup refuses it as for the other routes.
     order: Option<String>,
+    cursor: Option<String>,
 }
 
 impl PageParams {
@@ -33,7 +34,7 @@ impl PageParams {
             until_ms: time_ms(TimeField::Until, self.until.as_ref())?,
             limit: limit(self.limit.as_ref(), limits)?,
             order: order(self.order.as_deref())?,
-            ..Default::default()
+            cursor: self.cursor.clone(),
         })
     }
 
@@ -48,7 +49,7 @@ impl PageParams {
             until_ms: time_ms(TimeField::Until, self.until.as_ref())?,
             limit: limit(self.limit.as_ref(), limits)?,
             order: order(self.order.as_deref())?,
-            ..Default::default()
+            cursor: self.cursor.clone(),
         })
     }
 }

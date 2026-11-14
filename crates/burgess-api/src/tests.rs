@@ -127,22 +127,35 @@ fn a_row_without_a_child_subflow_has_none() {
 fn a_page_without_problems_leaves_them_out() {
     let page: Page = Page {
         rows: Vec::new(),
-        truncated: true,
+        cursor: Some("CURSOR".into()),
         problems: Vec::new(),
     };
     assert_eq!(
         serde_json::to_value(&page).unwrap(),
-        json!({"rows": [], "truncated": true})
+        json!({"rows": [], "cursor": "CURSOR"})
     );
-    let back: Page = serde_json::from_value(json!({"rows": [], "truncated": false})).unwrap();
+    let back: Page = serde_json::from_value(json!({"rows": []})).unwrap();
     assert!(back.problems.is_empty());
+}
+
+/// The last page has no cursor, and its JSON tells that by leaving it out.
+#[test]
+fn the_last_page_leaves_out_the_cursor() {
+    let page: Page = Page {
+        rows: Vec::new(),
+        cursor: None,
+        problems: Vec::new(),
+    };
+    assert_eq!(serde_json::to_value(&page).unwrap(), json!({"rows": []}));
+    let back: Page = serde_json::from_value(json!({"rows": []})).unwrap();
+    assert_eq!(back.cursor, None);
 }
 
 #[test]
 fn a_page_lists_its_problems() {
     let page: Page = Page {
         rows: Vec::new(),
-        truncated: false,
+        cursor: None,
         problems: vec!["the manifest of 20261105 is invalid".into()],
     };
     assert_eq!(
