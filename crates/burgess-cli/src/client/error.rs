@@ -5,6 +5,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 
 use burgess_api::grpc::WHERE_COLUMN;
+use burgess_core::report::error_chain;
 
 use tonic::{Code, Status};
 
@@ -42,6 +43,15 @@ pub enum ClientError {
         #[source]
         cause: StatusCause,
     },
+    /// Retention deleted rows of the answer that the cursor continues,
+    /// since the answer started. Only an answer from its start can tell
+    /// what is still stored; the words of the service say so.
+    #[error("the query service cannot continue the answer")]
+    Expired {
+        /// The words of the service.
+        #[source]
+        cause: StatusCause,
+    },
     /// The service, or a different program at its address, failed.
     #[error("the query service at {server} failed with {code:?}")]
     Failed {
@@ -56,11 +66,17 @@ pub enum ClientError {
 }
 
 impl ClientError {
-    /// The error that `status` tells, from the service at `server`.
-    pub(super) fn from_status(status: Status, server: &ServerAddress) -> Self {
+    /// The error that `status` tells, from the service at `server`, for a
+    /// request that `continued` an answer with a cursor or not.
+    pub(super) fn from_status(status: Status, server: &ServerAddress, continued: bool) -> Self {
         match status.code() {
             Code::InvalidArgument => ClientError::Refused {
                 where_column: where_column(&status),
+                cause: StatusCause(status),
+            },
+            // The service tells an expired cursor so. To a request without
+            // a cursor, it is the answer of another program.
+            Code::FailedPrecondition if continued => ClientError::Expired {
                 cause: StatusCause(status),
             },
             Code::Unavailable => ClientError::Unavailable {
@@ -78,7 +94,16 @@ impl ClientError {
     /// Whether the command line is at fault, thus only a different command
     /// line can succeed.
     pub fn is_usage(&self) -> bool {
-        matches!(self, ClientError::Refused { .. })
+        matches!(
+            self,
+            ClientError::Refused { .. } | ClientError::Expired { .. }
+        )
+    }
+
+    /// The problem of an answer that stopped for this error after some
+    /// rows.
+    pub fn stopped_answer(&self) -> String {
+        format!("the answer stopped before its end: {}", error_chain(self))
     }
 }
 

@@ -88,14 +88,17 @@ fn the_server_defaults_to_a_local_service() {
 fn defaults_ask_for_a_listing_with_the_services_own_options() {
     let cli = parse(&["tree", TREE]).unwrap();
     assert_eq!(cli.output, Output::Listing);
-    let Command::Tree { page, .. } = cli.command else {
+    let Command::Tree { days, paging, .. } = cli.command else {
         panic!("a tree lookup");
     };
+    assert_eq!(days, DaysArgs { until: None });
     assert_eq!(
-        page,
-        PageArgs {
-            until: None,
-            limit: None
+        paging,
+        PagingArgs {
+            limit: None,
+            all: false,
+            page_size: None,
+            cursor: None,
         }
     );
 }
@@ -137,11 +140,11 @@ fn until_is_read_as_rfc_3339_or_unix_milliseconds() {
         "2026-11-05T12:00:00Z",
         "2026-11-05T13:00:00+01:00",
     ] {
-        let Command::Flow { page, .. } = parse(&["flow", FLOW, "--until", until]).unwrap().command
+        let Command::Flow { days, .. } = parse(&["flow", FLOW, "--until", until]).unwrap().command
         else {
             panic!("a flow lookup");
         };
-        assert_eq!(page.until, Some(expected), "{until}");
+        assert_eq!(days.until, Some(expected), "{until}");
     }
 }
 
@@ -157,17 +160,63 @@ fn an_until_that_is_no_time_is_refused() {
 }
 
 #[test]
-fn a_limit_is_a_positive_number() {
-    let Command::Tree { page, .. } = parse(&["tree", TREE, "--limit", "20"]).unwrap().command
+fn a_limit_and_a_page_size_are_positive_numbers() {
+    let Command::Tree { paging, .. } = parse(&["tree", TREE, "--limit", "20", "--page-size", "5"])
+        .unwrap()
+        .command
     else {
         panic!("a tree lookup");
     };
-    assert_eq!(page.limit, NonZeroU32::new(20));
-    for limit in ["0", "-1", "many", "4294967296"] {
+    assert_eq!(paging.limit, NonZeroU32::new(20));
+    assert_eq!(paging.page_size, NonZeroU32::new(5));
+    for option in ["--limit", "--page-size"] {
+        for value in ["0", "-1", "many", "4294967296"] {
+            assert_eq!(
+                refused(&["tree", TREE, &format!("{option}={value}")]).kind(),
+                ErrorKind::ValueValidation,
+                "{option} {value}"
+            );
+        }
+    }
+}
+
+/// All rows have no number, thus a limit with them asks for two totals.
+#[test]
+fn all_rows_and_a_limit_are_refused_together() {
+    assert_eq!(
+        refused(&["refs", "order_id", "ORD-1", "--all", "--limit", "5"]).kind(),
+        ErrorKind::ArgumentConflict
+    );
+}
+
+#[test]
+fn each_lookup_takes_the_paging_options() {
+    for lookup in [
+        vec!["tree", TREE],
+        vec!["flow", FLOW],
+        vec!["states", "a", "b"],
+        vec!["refs", "order_id", "ORD-1"],
+    ] {
+        let args: Vec<&str> = lookup
+            .iter()
+            .copied()
+            .chain(["--all", "--page-size", "7", "--cursor", "ABC"])
+            .collect();
+        let paging = match parse(&args).unwrap().command {
+            Command::Tree { paging, .. }
+            | Command::Flow { paging, .. }
+            | Command::States { paging, .. }
+            | Command::Refs { paging, .. } => paging,
+        };
         assert_eq!(
-            refused(&["tree", TREE, &format!("--limit={limit}")]).kind(),
-            ErrorKind::ValueValidation,
-            "{limit}"
+            paging,
+            PagingArgs {
+                limit: None,
+                all: true,
+                page_size: NonZeroU32::new(7),
+                cursor: Some("ABC".into()),
+            },
+            "{lookup:?}"
         );
     }
 }

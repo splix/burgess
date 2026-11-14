@@ -167,6 +167,6 @@ fn problems_and_a_cut_page_are_noted() {
         notes(&page),
         "problem: the manifest of 20261105 is invalid: bad frame\n\
          the service could not read everything; rows or payloads may be missing\n\
-         more rows exist than the 4 shown; a larger --limit, up to the service's maximum, shows more\n"
+         more rows exist after the 4 shown; to print them, repeat the command with --cursor NEXT\n"
     );
 }

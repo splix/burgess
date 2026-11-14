@@ -10,7 +10,7 @@ use burgess_api::grpc::{
 };
 use burgess_core::flow::{FlowId, TreeId};
 
-use crate::args::{PageArgs, StatesArgs, TsOrder, WindowArgs};
+use crate::args::{DaysArgs, StatesArgs, TsOrder, WindowArgs};
 
 /// Why the command line cannot make a request.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -24,29 +24,39 @@ pub enum ArgsError {
     },
 }
 
-/// The GetTree request for all rows of `tree`.
-pub fn tree_request(tree: TreeId, page: PageArgs) -> GetTreeRequest {
+/// A request of an answer in pages.
+pub trait PagedRequest: Clone {
+    /// The request for the page of at most `limit` rows after `cursor`, or
+    /// for the first page. All pages of an answer have the same other
+    /// fields, or the service refuses the cursor.
+    fn page(self, limit: Option<u32>, cursor: Option<String>) -> Self;
+}
+
+/// The GetTree request for all rows of `tree`, without its page.
+pub fn tree_request(tree: TreeId, days: DaysArgs) -> GetTreeRequest {
     GetTreeRequest {
         tree: Some(Tree::TreeId(tree.to_string())),
-        until_ms: page.until_ms(),
-        limit: page.limit(),
+        until_ms: days.until_ms(),
+        limit: None,
         order: Order::Unspecified as i32,
         cursor: None,
     }
 }
 
-/// The GetFlow request for all rows of `flow` and of the flows below it.
-pub fn flow_request(flow: FlowId, page: PageArgs) -> GetFlowRequest {
+/// The GetFlow request for all rows of `flow` and of the flows below it,
+/// without its page.
+pub fn flow_request(flow: FlowId, days: DaysArgs) -> GetFlowRequest {
     GetFlowRequest {
         flow_id: flow.to_string(),
-        until_ms: page.until_ms(),
-        limit: page.limit(),
+        until_ms: days.until_ms(),
+        limit: None,
         order: Order::Unspecified as i32,
         cursor: None,
     }
 }
 
-/// The ListStates request for the states of `service` and `category`.
+/// The ListStates request for the states of `service` and `category`,
+/// without its page.
 pub fn states_request(
     service: String,
     category: String,
@@ -73,13 +83,14 @@ pub fn states_request(
         meta,
         since_ms: window.since_ms(),
         until_ms: window.until_ms(),
-        limit: window.limit(),
+        limit: None,
         order: order as i32,
         cursor: None,
     })
 }
 
-/// The ListRefs request for the references to `domain_id`.
+/// The ListRefs request for the references to `domain_id`, without its
+/// page.
 pub fn refs_request(
     ref_type: String,
     domain_id: String,
@@ -94,19 +105,15 @@ pub fn refs_request(
         category,
         since_ms: window.since_ms(),
         until_ms: window.until_ms(),
-        limit: window.limit(),
+        limit: None,
         order: Order::Unspecified as i32,
         cursor: None,
     }
 }
 
-impl PageArgs {
+impl DaysArgs {
     fn until_ms(&self) -> Option<i64> {
         self.until.map(|until| until.as_millisecond())
-    }
-
-    fn limit(&self) -> Option<u32> {
-        self.limit.map(|limit| limit.get())
     }
 }
 
@@ -118,8 +125,44 @@ impl WindowArgs {
     fn until_ms(&self) -> Option<i64> {
         self.until.map(|until| until.as_millisecond())
     }
+}
 
-    fn limit(&self) -> Option<u32> {
-        self.limit.map(|limit| limit.get())
+impl PagedRequest for GetTreeRequest {
+    fn page(self, limit: Option<u32>, cursor: Option<String>) -> Self {
+        GetTreeRequest {
+            limit,
+            cursor,
+            ..self
+        }
+    }
+}
+
+impl PagedRequest for GetFlowRequest {
+    fn page(self, limit: Option<u32>, cursor: Option<String>) -> Self {
+        GetFlowRequest {
+            limit,
+            cursor,
+            ..self
+        }
+    }
+}
+
+impl PagedRequest for ListStatesRequest {
+    fn page(self, limit: Option<u32>, cursor: Option<String>) -> Self {
+        ListStatesRequest {
+            limit,
+            cursor,
+            ..self
+        }
+    }
+}
+
+impl PagedRequest for ListRefsRequest {
+    fn page(self, limit: Option<u32>, cursor: Option<String>) -> Self {
+        ListRefsRequest {
+            limit,
+            cursor,
+            ..self
+        }
     }
 }

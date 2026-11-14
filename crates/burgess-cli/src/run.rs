@@ -9,6 +9,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::args::{Cli, Command};
 use crate::client::{ClientError, QueryClient};
 use crate::output::{Heading, RefsHeading, StatesHeading, write_notes};
+use crate::paging::{Paging, follow};
 use crate::requests::{ArgsError, flow_request, refs_request, states_request, tree_request};
 
 /// How a lookup that answered went.
@@ -106,15 +107,19 @@ fn pointer(expression: &str, column: NonZeroUsize) -> String {
 pub async fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write) -> Result<Outcome, RunError> {
     let output = cli.output;
     match cli.command {
-        Command::Tree { id, page } => {
-            let request = tree_request(id.tree(), page);
-            let page = QueryClient::new(cli.server)?.tree(request).await?;
+        Command::Tree { id, days, paging } => {
+            let request = tree_request(id.tree(), days);
+            let client = QueryClient::new(cli.server)?;
+            let paging = Paging::from(paging);
+            let page = follow(request, &paging, async |page| client.tree(page).await).await?;
             let printed = output.write_rows(Heading::Tree(id.tree()), &page, out);
             finish(&page, printed, out, err)
         }
-        Command::Flow { id, page } => {
-            let request = flow_request(id, page);
-            let page = QueryClient::new(cli.server)?.flow(request).await?;
+        Command::Flow { id, days, paging } => {
+            let request = flow_request(id, days);
+            let client = QueryClient::new(cli.server)?;
+            let paging = Paging::from(paging);
+            let page = follow(request, &paging, async |page| client.flow(page).await).await?;
             let printed = output.write_rows(Heading::Flow(id), &page, out);
             finish(&page, printed, out, err)
         }
@@ -123,6 +128,7 @@ pub async fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write) -> Result<O
             category,
             states,
             window,
+            paging,
         } => {
             let heading = StatesHeading {
                 service: service.clone(),
@@ -130,8 +136,9 @@ pub async fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write) -> Result<O
             };
             let expression = states.filter.clone();
             let request = states_request(service, category, states, window)?;
-            let page = QueryClient::new(cli.server)?
-                .states(request)
+            let client = QueryClient::new(cli.server)?;
+            let paging = Paging::from(paging);
+            let page = follow(request, &paging, async |page| client.states(page).await)
                 .await
                 .map_err(|error| refused_filter(error, expression))?;
             let printed = output.write_states(&heading, &page, out);
@@ -143,13 +150,16 @@ pub async fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write) -> Result<O
             service,
             category,
             window,
+            paging,
         } => {
             let heading = RefsHeading {
                 ref_type: ref_type.clone(),
                 domain_id: domain_id.clone(),
             };
             let request = refs_request(ref_type, domain_id, service, category, window);
-            let page = QueryClient::new(cli.server)?.refs(request).await?;
+            let client = QueryClient::new(cli.server)?;
+            let paging = Paging::from(paging);
+            let page = follow(request, &paging, async |page| client.refs(page).await).await?;
             let printed = output.write_refs(&heading, &page, out);
             finish(&page, printed, out, err)
         }

@@ -56,6 +56,10 @@ macro_rules! tree_response {
                 self.cursor.as_deref()
             }
 
+            fn is_row(&self) -> bool {
+                matches!(self.item, Some($item::Item::Row(_)))
+            }
+
             fn into_page_item(self) -> Option<PageItem<Row>> {
                 Some(match self.into_item()? {
                     TreeItem::Row(row) => PageItem::Row(Row::try_from(row)),

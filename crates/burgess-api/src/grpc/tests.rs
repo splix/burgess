@@ -216,6 +216,20 @@ fn a_page_whose_last_row_has_no_cursor_is_the_last_page() {
     assert!(page.problems.is_empty());
 }
 
+/// A page of a stream that broke continues after its last row, also when a
+/// problem came after it.
+#[test]
+fn the_cursor_of_a_page_is_the_cursor_of_its_last_row() {
+    let mut messages = vec![with_cursor(TreeItem::Row(state()), "FIRST")];
+    messages.extend(responses(vec![TreeItem::Problem(Problem {
+        message: "the payload of the next row is not JSON".into(),
+    })]));
+
+    let page = Page::from_responses(messages);
+
+    assert_eq!(page.cursor.as_deref(), Some("FIRST"));
+}
+
 #[test]
 fn what_the_page_cannot_hold_becomes_a_problem_and_the_rest_is_kept() {
     let bad_time = TreeRow {

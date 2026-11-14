@@ -40,18 +40,24 @@ pub enum Command {
         /// A tree id, 24 hex characters, or a flow id, 32.
         #[arg(value_name = "ID")]
         id: FlowOrTree,
-        /// Which rows to ask for.
+        /// Which days to look in.
         #[command(flatten)]
-        page: PageArgs,
+        days: DaysArgs,
+        /// How many rows to print.
+        #[command(flatten)]
+        paging: PagingArgs,
     },
     /// Every row of a flow and of the flows split off below it.
     Flow {
         /// A flow id, 32 hex characters.
         #[arg(value_name = "FLOW_ID")]
         id: FlowId,
-        /// Which rows to ask for.
+        /// Which days to look in.
         #[command(flatten)]
-        page: PageArgs,
+        days: DaysArgs,
+        /// How many rows to print.
+        #[command(flatten)]
+        paging: PagingArgs,
     },
     /// The states of a service and category, in a time window, of any
     /// flow.
@@ -63,9 +69,12 @@ pub enum Command {
         /// Which states to ask for.
         #[command(flatten)]
         states: StatesArgs,
-        /// The time window and the size of the page.
+        /// The time window.
         #[command(flatten)]
         window: WindowArgs,
+        /// How many states to print.
+        #[command(flatten)]
+        paging: PagingArgs,
     },
     /// Each flow that recorded a reference to an outside id, such as an
     /// order id.
@@ -80,9 +89,12 @@ pub enum Command {
         /// Only references recorded in this category.
         #[arg(long)]
         category: Option<String>,
-        /// The time window and the size of the page.
+        /// The time window.
         #[command(flatten)]
         window: WindowArgs,
+        /// How many references to print.
+        #[command(flatten)]
+        paging: PagingArgs,
     },
 }
 
@@ -112,7 +124,7 @@ pub enum TsOrder {
     Desc,
 }
 
-/// The time window of a lookup, and how many rows to print.
+/// The time window of a lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Args)]
 pub struct WindowArgs {
     /// The earliest time of a row, as an RFC 3339 time or unix milliseconds.
@@ -125,9 +137,6 @@ pub struct WindowArgs {
     /// then have no end.
     #[arg(long, value_parser = parse_time)]
     pub until: Option<Timestamp>,
-    /// The most rows to print. The service has a default and a maximum.
-    #[arg(long)]
-    pub limit: Option<NonZeroU32>,
 }
 
 /// `KEY=VALUE` as a key and a value. The value can hold `=`.
@@ -144,17 +153,40 @@ fn label(text: &str) -> Result<(String, String), String> {
     Ok((key.to_string(), value.to_string()))
 }
 
-/// Which rows of a lookup to ask for.
+/// Which days a tree or a flow lookup looks in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Args)]
-pub struct PageArgs {
+pub struct DaysArgs {
     /// The last day to look in, as an RFC 3339 time or unix milliseconds.
     /// Days are searched up to the day after it, since rows are filed by the
     /// day they were stored.
     #[arg(long, value_parser = parse_time)]
     pub until: Option<Timestamp>,
-    /// The most rows to print. The service has a default and a maximum.
-    #[arg(long)]
+}
+
+/// How many rows to print, and where in the answer to start.
+///
+/// The service answers in pages. The CLI asks for the next pages until it
+/// has the rows asked for, and prints them as one answer.
+#[derive(Debug, Clone, PartialEq, Eq, Args)]
+pub struct PagingArgs {
+    /// The most rows to print. Without it and without --all, the rows of
+    /// one page.
+    #[arg(long, conflicts_with = "all")]
     pub limit: Option<NonZeroU32>,
+    /// Print all rows of the answer.
+    #[arg(long)]
+    pub all: bool,
+    /// The most rows that one request asks for. Without it, a request asks
+    /// for the rows still to print, or for the service's default with
+    /// --all. The service refuses a request over its maximum, thus a
+    /// --limit over it needs a --page-size.
+    #[arg(long, value_name = "ROWS")]
+    pub page_size: Option<NonZeroU32>,
+    /// Continue an earlier answer after the row of this cursor, which the
+    /// CLI printed. The other options must be the same as for the earlier
+    /// answer, except the number of rows.
+    #[arg(long)]
+    pub cursor: Option<String>,
 }
 
 #[cfg(test)]

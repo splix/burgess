@@ -1,8 +1,8 @@
 //! Printing a page of rows.
 //!
 //! Rows go to standard output and nothing else does, so that JSON lines can
-//! be piped as they are. What may be missing from them, problems and a cut
-//! page, goes to standard error in either form.
+//! be piped as they are. What may be missing from them, problems and the
+//! cursor of the rows after them, goes to standard error in either form.
 
 mod compact;
 mod json_lines;

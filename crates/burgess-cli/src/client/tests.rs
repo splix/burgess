@@ -2,7 +2,6 @@
 //! answers are read.
 
 use std::collections::BTreeMap;
-use std::num::NonZeroU32;
 
 use burgess_api::grpc::tree_row::Entry;
 use burgess_api::grpc::{PayloadType, Problem, State, TreeItem, TreeRow};
@@ -10,8 +9,8 @@ use burgess_core::report::error_chain;
 use jiff::Timestamp;
 
 use super::*;
-use crate::args::PageArgs;
-use crate::requests::{flow_request, tree_request};
+use crate::args::DaysArgs;
+use crate::requests::{PagedRequest, flow_request, tree_request};
 use crate::server::ServerAddress;
 use crate::test_support::{Answer, MockService, Received};
 
@@ -38,15 +37,12 @@ fn client(service: &MockService) -> QueryClient {
     QueryClient::new(service.server.clone()).unwrap()
 }
 
-fn tree(page: PageArgs) -> GetTreeRequest {
-    tree_request(TREE.parse().unwrap(), page)
+fn tree(days: DaysArgs) -> GetTreeRequest {
+    tree_request(TREE.parse().unwrap(), days)
 }
 
-fn no_options() -> PageArgs {
-    PageArgs {
-        until: None,
-        limit: None,
-    }
+fn no_options() -> DaysArgs {
+    DaysArgs { until: None }
 }
 
 async fn lookup_error(answer: Answer) -> (ClientError, ServerAddress) {
@@ -58,12 +54,13 @@ async fn lookup_error(answer: Answer) -> (ClientError, ServerAddress) {
 #[tokio::test]
 async fn asks_for_a_tree_with_its_options_and_reads_the_page() {
     let service = MockService::start(Answer::rows(vec![state()])).await;
-    let options = PageArgs {
+    let options = DaysArgs {
         until: Some(Timestamp::from_millisecond(1_793_880_000_000).unwrap()),
-        limit: NonZeroU32::new(20),
     };
+    let request = tree(options).page(Some(20), Some("NEXT".into()));
 
-    let page = client(&service).tree(tree(options)).await.unwrap();
+    let reply = client(&service).tree(request).await;
+    let page = reply.unwrap().page;
 
     assert_eq!(page.rows.len(), 1);
     assert_eq!(
@@ -78,6 +75,7 @@ async fn asks_for_a_tree_with_its_options_and_reads_the_page() {
             )),
             until_ms: Some(1_793_880_000_000),
             limit: Some(20),
+            cursor: Some("NEXT".into()),
             ..Default::default()
         })]
     );
@@ -112,11 +110,13 @@ async fn problems_and_a_cut_reach_the_page() {
     ))
     .await;
 
-    let page = client(&service).tree(tree(no_options())).await.unwrap();
+    let reply = client(&service).tree(tree(no_options())).await.unwrap();
 
+    let page = &reply.page;
     assert_eq!(page.problems, ["the manifest of 20261105 is invalid"]);
     assert_eq!(page.rows.len(), 1);
     assert_eq!(page.cursor.as_deref(), Some("NEXT"));
+    assert!(!reply.cut_short, "the service ended the stream");
 }
 
 #[tokio::test]
@@ -131,6 +131,43 @@ async fn a_refusal_carries_the_services_own_words() {
         "the query service refused the request: limit 20000 is over the maximum of 10000"
     );
     assert!(error.is_usage());
+}
+
+/// The service refuses an expired cursor so. Only an answer from its
+/// start can go on, thus the command line must change.
+#[tokio::test]
+async fn an_expired_cursor_is_its_own_error() {
+    let service = MockService::start(Answer::Refuse(Status::failed_precondition(
+        "the cursor has expired; send the request again without a cursor",
+    )))
+    .await;
+    let request = tree(no_options()).page(None, Some("OLD".into()));
+
+    let error = client(&service).tree(request).await.unwrap_err();
+
+    assert_eq!(
+        error_chain(&error),
+        "the query service cannot continue the answer: the cursor has expired; send the request again without a cursor"
+    );
+    assert!(error.is_usage());
+}
+
+/// A request without a cursor has no cursor to expire: another program
+/// answers at the address.
+#[tokio::test]
+async fn a_failed_precondition_without_a_cursor_is_a_failure_of_the_service() {
+    let (error, server) = lookup_error(Answer::Refuse(Status::failed_precondition(
+        "the system is not ready",
+    )))
+    .await;
+
+    assert_eq!(
+        error_chain(&error),
+        format!(
+            "the query service at {server} failed with FailedPrecondition: the system is not ready"
+        )
+    );
+    assert!(!error.is_usage());
 }
 
 #[tokio::test]
@@ -152,8 +189,10 @@ async fn an_answer_that_stops_early_keeps_its_rows_and_tells_why() {
     ]))
     .await;
 
-    let page = client(&service).tree(tree(no_options())).await.unwrap();
+    let reply = client(&service).tree(tree(no_options())).await.unwrap();
 
+    let page = &reply.page;
+    assert!(reply.cut_short);
     assert_eq!(page.rows.len(), 1);
     assert_eq!(
         page.problems,

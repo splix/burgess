@@ -22,6 +22,9 @@ pub trait AnswerMessage {
     type Row;
     /// The cursor after the row of the message, if more rows come after it.
     fn cursor_after(&self) -> Option<&str>;
+    /// Whether the message holds a row, thus a cursor or the end of the
+    /// answer. A problem message has neither.
+    fn is_row(&self) -> bool;
     /// The item of the message. `None` for a message kind that is newer
     /// than this version.
     fn into_page_item(self) -> Option<PageItem<Self::Row>>;
@@ -32,8 +35,10 @@ impl<R> Page<R> {
     ///
     /// A row that the page cannot hold, or a message of an unknown kind,
     /// becomes a problem. The other rows are kept. The cursor of the page is
-    /// the cursor of the last message, thus a page has no cursor when the
-    /// answer has no more rows.
+    /// the cursor of the last row message, also of a row that it cannot
+    /// hold, thus a page has no cursor when the answer has no more rows. A
+    /// problem message has no cursor, and a stream that breaks after one
+    /// still continues after the row before it.
     pub fn from_responses<M: AnswerMessage<Row = R>>(
         responses: impl IntoIterator<Item = M>,
     ) -> Self {
@@ -43,7 +48,9 @@ impl<R> Page<R> {
             problems: Vec::new(),
         };
         for response in responses {
-            page.cursor = response.cursor_after().map(str::to_string);
+            if response.is_row() {
+                page.cursor = response.cursor_after().map(str::to_string);
+            }
             match response.into_page_item() {
                 Some(PageItem::Row(Ok(row))) => page.rows.push(row),
                 Some(PageItem::Row(Err(error))) => page.problems.push(error_chain(&error)),
@@ -64,6 +71,10 @@ impl AnswerMessage for ListStatesResponse {
         self.cursor.as_deref()
     }
 
+    fn is_row(&self) -> bool {
+        matches!(self.item, Some(list_states_response::Item::Row(_)))
+    }
+
     fn into_page_item(self) -> Option<PageItem<Row>> {
         Some(match self.item? {
             list_states_response::Item::Row(row) => PageItem::Row(Row::try_from(row)),
@@ -77,6 +88,10 @@ impl AnswerMessage for ListRefsResponse {
 
     fn cursor_after(&self) -> Option<&str> {
         self.cursor.as_deref()
+    }
+
+    fn is_row(&self) -> bool {
+        matches!(self.item, Some(list_refs_response::Item::Row(_)))
     }
 
     fn into_page_item(self) -> Option<PageItem<RefRow>> {

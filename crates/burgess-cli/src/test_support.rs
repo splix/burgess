@@ -26,6 +26,9 @@ pub(crate) enum Answer {
     States(Vec<ListStatesResponse>),
     /// The service answers ListRefs with these messages.
     Refs(Vec<ListRefsResponse>),
+    /// The service answers each request with the answer for its cursor, and
+    /// refuses a cursor that it did not give.
+    Pages(Vec<(Option<String>, Answer)>),
 }
 
 impl Answer {
@@ -49,6 +52,18 @@ impl Answer {
     pub(crate) fn rows(rows: Vec<TreeRow>) -> Self {
         Answer::items(rows.into_iter().map(TreeItem::Row).collect())
     }
+
+    /// The answer to a request with `cursor`.
+    fn after(&self, cursor: Option<&str>) -> Result<&Answer, Status> {
+        let Answer::Pages(pages) = self else {
+            return Ok(self);
+        };
+        pages
+            .iter()
+            .find(|(after, _)| after.as_deref() == cursor)
+            .map(|(_, answer)| answer)
+            .ok_or_else(|| Status::invalid_argument(format!("no page after {cursor:?}")))
+    }
 }
 
 /// A request that the service received.
@@ -58,6 +73,18 @@ pub(crate) enum Received {
     Flow(GetFlowRequest),
     States(ListStatesRequest),
     Refs(ListRefsRequest),
+}
+
+impl Received {
+    /// The cursor of the request.
+    fn cursor(&self) -> Option<&str> {
+        match self {
+            Received::Tree(request) => request.cursor.as_deref(),
+            Received::Flow(request) => request.cursor.as_deref(),
+            Received::States(request) => request.cursor.as_deref(),
+            Received::Refs(request) => request.cursor.as_deref(),
+        }
+    }
 }
 
 /// A running service, which stops when the test ends.
@@ -102,8 +129,10 @@ type Messages<R> = tokio_stream::Iter<std::vec::IntoIter<Result<R, Status>>>;
 
 impl Fixed {
     fn answer<R: TreeResponse>(&self, received: Received) -> Result<Response<Messages<R>>, Status> {
+        let answer = self.answer.after(received.cursor());
         self.received.lock().unwrap().push(received);
-        match &self.answer {
+        let answer = answer?;
+        match answer {
             Answer::Refuse(status) => Err(status.clone()),
             Answer::Stream(items) => {
                 let messages: Vec<_> = items
@@ -126,12 +155,13 @@ impl Fixed {
         received: Received,
         messages: impl Fn(&Answer) -> Option<&Vec<R>>,
     ) -> Result<Response<Messages<R>>, Status> {
+        let answer = self.answer.after(received.cursor());
         self.received.lock().unwrap().push(received);
-        if let Answer::Refuse(status) = &self.answer {
+        let answer = answer?;
+        if let Answer::Refuse(status) = answer {
             return Err(status.clone());
         }
-        let messages =
-            messages(&self.answer).ok_or_else(|| Status::unimplemented("not this answer"))?;
+        let messages = messages(answer).ok_or_else(|| Status::unimplemented("not this answer"))?;
         let messages: Vec<_> = messages.iter().cloned().map(Ok).collect();
         Ok(Response::new(tokio_stream::iter(messages)))
     }

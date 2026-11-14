@@ -4,19 +4,25 @@
 //! Usage: `burgess [--server <url>] [-o listing|jsonl] <command>`, where the
 //! command is one of:
 //!
-//! - `tree|flow <id> [--until <time>] [--limit <rows>]`
+//! - `tree|flow <id> [--until <time>]`
 //! - `states <service> <category> [--where <expression>]
 //!   [--meta <key=value>]... [--order asc|desc] [--since <time>]
-//!   [--until <time>] [--limit <rows>]`
+//!   [--until <time>]`
 //! - `refs <ref_type> <domain_id> [--service <name>] [--category <name>]
-//!   [--since <time>] [--until <time>] [--limit <rows>]`
+//!   [--since <time>] [--until <time>]`
+//!
+//! Each command also takes `[--limit <rows> | --all] [--page-size <rows>]
+//! [--cursor <cursor>]`. The CLI asks for pages until it has the rows, and
+//! prints them as one answer. When more rows exist, it prints the cursor
+//! that continues after them.
 //!
 //! The server may also come from `BURGESS_SERVER`; logging follows
 //! `RUST_LOG` (default `warn`) and goes to standard error.
 //!
 //! Exit codes: 0 when every row was read, 1 when the lookup failed, 2 for a
-//! command line the CLI or the service refused, 3 when rows were printed but
-//! the service could not read everything, so some may be missing.
+//! command line the CLI or the service refused, also for a cursor that
+//! expired, 3 when rows were printed but the service could not read
+//! everything, or a later page failed, so some may be missing.
 
 use std::io;
 use std::process::ExitCode;

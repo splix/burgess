@@ -365,3 +365,5 @@ fn the_mark_counts_the_cells_of_wide_and_combining_characters() {
     );
     assert_eq!(pointer("e\u{301} x", at(4)), "  e\u{301} x\n    ^");
 }
+
+mod paging;
