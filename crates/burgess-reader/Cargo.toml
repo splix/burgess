@@ -13,12 +13,14 @@ burgess-api.workspace = true
 burgess-core.workspace = true
 burgess-store.workspace = true
 bytes.workspace = true
+data-encoding.workspace = true
 figment.workspace = true
 futures.workspace = true
 humantime-serde.workspace = true
 jiff.workspace = true
 object_store.workspace = true
 parquet = { workspace = true, features = ["async"] }
+prost.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
@@ -26,6 +28,11 @@ tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sig
 tonic = { workspace = true, features = ["codegen"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+twox-hash.workspace = true
+
+[build-dependencies]
+prost-build.workspace = true
+protox.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true

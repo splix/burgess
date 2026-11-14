@@ -7,7 +7,7 @@ use jiff::{SignedDuration, Timestamp};
 
 use super::error::{RequestError, TimeField};
 use super::options::{PageOptions, on_a_day, time};
-use super::{Queries, log_problems};
+use super::{Queries, log_problems, non_blank};
 use crate::filter::Filter;
 use crate::states_file::StatesFilter;
 
@@ -32,10 +32,7 @@ impl Queries {
         }
         // Only spaces is no filter. The text is parsed as sent, thus the
         // column of an error counts in it.
-        let payload = request
-            .r#where
-            .as_deref()
-            .filter(|text| !text.trim().is_empty())
+        let payload = non_blank(request.r#where.as_deref())
             .map(str::parse::<Filter>)
             .transpose()?;
         let (page, order) = PageOptions::from(&request).check_ordered(&self.limits)?;

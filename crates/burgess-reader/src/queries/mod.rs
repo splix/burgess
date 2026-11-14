@@ -7,6 +7,7 @@
 
 mod error;
 mod options;
+mod paged;
 mod refs;
 mod states;
 
@@ -86,4 +87,10 @@ fn log_problems(problems: &[impl Error + 'static], lookup: impl Display) {
 /// string sends "" for no value.
 fn non_empty<S: AsRef<str>>(value: Option<S>) -> Option<S> {
     value.filter(|value| !value.as_ref().is_empty())
+}
+
+/// `value`, or `None` when it is "" or only spaces. For an expression,
+/// where only spaces also tell nothing.
+fn non_blank<S: AsRef<str>>(value: Option<S>) -> Option<S> {
+    value.filter(|value| !value.as_ref().trim().is_empty())
 }

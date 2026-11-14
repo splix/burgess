@@ -36,6 +36,7 @@ arrow-select = "60"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
 crossbeam-queue = "0.3"
+data-encoding = "2"
 parquet = { version = "60", default-features = false, features = ["arrow", "zstd"] }
 jiff = { version = "0.2", default-features = false, features = ["std"] }
 prost = "0.14"
@@ -49,6 +50,7 @@ tokio-stream = "0.1"
 tonic = { version = "0.14", default-features = false }
 tonic-prost = "0.14"
 tower = "0.5"
+twox-hash = { version = "2", default-features = false, features = ["std", "xxhash3_64"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-properties = "0.1"

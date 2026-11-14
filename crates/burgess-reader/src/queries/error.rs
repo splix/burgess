@@ -8,6 +8,7 @@ use burgess_core::validation::ValidationError;
 use jiff::Timestamp;
 
 use crate::filter::FilterError;
+use crate::lookup_time::LookupTimeError;
 use crate::pages::LimitError;
 use crate::refs_lookup::UnboundedWalk;
 
@@ -81,6 +82,20 @@ pub enum RequestError {
     /// No answer gives a cursor yet.
     #[error("cursors are not served yet")]
     Cursor,
+}
+
+impl RequestError {
+    /// The error of the time option `field`.
+    pub(super) fn time(field: TimeField, error: LookupTimeError) -> Self {
+        match error {
+            LookupTimeError::Ms { ms } => RequestError::TimeMs { field, ms },
+            LookupTimeError::Day { time, source } => RequestError::TimeDay {
+                field,
+                time,
+                source,
+            },
+        }
+    }
 }
 
 /// A time option of a request.

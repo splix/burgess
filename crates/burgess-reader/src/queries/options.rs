@@ -5,11 +5,11 @@ use std::num::NonZeroUsize;
 use burgess_api::grpc::{
     GetFlowRequest, GetTreeRequest, ListRefsRequest, ListStatesRequest, Order,
 };
-use burgess_core::storage::Day;
 use jiff::Timestamp;
 
 use super::error::{RequestError, TimeField};
 use super::non_empty;
+use crate::lookup_time;
 use crate::ordering::TsOrder;
 use crate::pages::PageLimits;
 
@@ -85,19 +85,13 @@ impl PageOptions<'_> {
 
 /// The time `ms` of the option `field`, refused when no day can hold it.
 pub(super) fn time(field: TimeField, ms: i64) -> Result<Timestamp, RequestError> {
-    let time = Timestamp::from_millisecond(ms).map_err(|_| RequestError::TimeMs { field, ms })?;
-    on_a_day(field, time)
+    lookup_time::from_ms(ms).map_err(|error| RequestError::time(field, error))
 }
 
 /// `time`, the value of the option `field`, refused when no day can hold
 /// it.
 pub(super) fn on_a_day(field: TimeField, time: Timestamp) -> Result<Timestamp, RequestError> {
-    Day::utc(time).map_err(|source| RequestError::TimeDay {
-        field,
-        time,
-        source,
-    })?;
-    Ok(time)
+    lookup_time::on_a_day(time).map_err(|error| RequestError::time(field, error))
 }
 
 /// The requests that have the same options, with the same names.

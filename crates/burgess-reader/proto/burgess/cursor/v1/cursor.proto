@@ -1,0 +1,49 @@
+// The cursor of a paged answer.
+//
+// The client gets it as base32 text and sends it back unchanged, thus only
+// the query service reads it. It is not part of the query API and can
+// change with the service, as long as `format_version` tells the change.
+syntax = "proto3";
+
+package burgess.cursor.v1;
+
+// Where an answer stopped, and what is necessary to continue it the same
+// way.
+message Cursor {
+  // Version of this message's meaning, so a reader can refuse a newer one.
+  uint32 format_version = 1;
+  // The hash of the request that the answer is for, so the cursor is not
+  // used to continue another request.
+  fixed64 query_hash = 2;
+  // The start of the window, in unix milliseconds. Not set when the window
+  // has no start.
+  optional int64 since_ms = 3;
+  // The end of the window, in unix milliseconds. Not set when the window
+  // has no end.
+  optional int64 until_ms = 4;
+  // The last row that the answer gave.
+  oneof position {
+    // In an answer without an order.
+    RowPosition unordered = 5;
+    // In an answer ordered by the state time.
+    OrderedPosition ordered = 6;
+  }
+}
+
+// A row of a stored file.
+message RowPosition {
+  // The day folder of the file, "YYYYMMDD".
+  string day = 1;
+  // The flush time that names the file, in unix milliseconds.
+  uint64 nnnn = 2;
+  // The index of the row in the file.
+  uint64 index = 3;
+}
+
+// A row of an answer ordered by the state time.
+message OrderedPosition {
+  // The time of the row by the producer clock, in unix milliseconds.
+  uint64 ts_ms = 1;
+  // The row in its file.
+  RowPosition row = 2;
+}
