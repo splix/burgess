@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 
 use super::*;
 use crate::batch::BatchConfig;
+use crate::flush::BloomConfig;
 use crate::parquet_files::{FileWriter, ParquetConfig};
 use crate::source::{MemoryLog, MemoryLogError, PartitionId, Position};
 use crate::test_support::{RecordingStore, TestClock};
@@ -45,6 +46,7 @@ async fn start(log: &MemoryLog, store: &Arc<RecordingStore>) -> (watch::Sender<b
         FileWriter::new(ParquetConfig::default()).unwrap(),
         TestClock::at("2026-09-27T10:00:00Z"),
         "writer-1".parse().unwrap(),
+        BloomConfig::default(),
     )
     .await
     .unwrap();
@@ -74,7 +76,7 @@ async fn stop_after(
 }
 
 async fn manifest(store: &RecordingStore) -> Option<DayManifest> {
-    match store.inner.get(&Path::from("20260927/_manifest")).await {
+    match store.inner.get(&Path::from("20260927/manifest")).await {
         Ok(stored) => Some(DayManifest::decode(&stored.bytes().await.unwrap()).unwrap()),
         Err(object_store::Error::NotFound { .. }) => None,
         Err(error) => panic!("{error}"),
@@ -104,6 +106,7 @@ async fn stop_stores_what_was_read_exactly_once() {
         FileWriter::new(ParquetConfig::default()).unwrap(),
         TestClock::at("2026-09-27T11:00:00Z"),
         "writer-1".parse().unwrap(),
+        BloomConfig::default(),
     )
     .await
     .unwrap();
@@ -158,7 +161,7 @@ async fn store_failures_are_retried_until_they_pass() {
 async fn a_failure_after_the_manifest_stops_the_writer_for_a_restart() {
     let log = log_with(3);
     let store = Arc::new(RecordingStore::default());
-    store.fail_writes_to(Some("_manifest"));
+    store.fail_writes_to(Some("/manifest"));
     let (_stop, running) = start(&log, &store).await;
     let stopped = running.await.unwrap();
     assert!(

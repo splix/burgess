@@ -14,9 +14,9 @@ use super::writer_id::WriterId;
 /// The name of an object the writer stores.
 ///
 /// Data files carry their flush time, so every flush gets new names and never
-/// overwrites a file readers may already use. The manifest has one fixed name
-/// per day; its `_` prefix keeps it out of `*.parquet` patterns. The
-/// checkpoint sits outside the days, one per writer.
+/// overwrites a file readers may already use. The manifest and the bloom
+/// filters have one fixed name per day, without the `.parquet` extension of
+/// the data files. The checkpoint sits outside the days, one per writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObjectName {
     /// `YYYYMMDD/NNNN-states.parquet`
@@ -33,12 +33,22 @@ pub enum ObjectName {
         /// The flush time.
         nnnn: UnixMillis,
     },
-    /// `YYYYMMDD/_manifest`
+    /// `YYYYMMDD/manifest`
     Manifest {
         /// The day it lists.
         day: Day,
     },
-    /// `_checkpoint/<writer_id>.json`
+    /// `YYYYMMDD/refs.bloom`, the references filter of the day.
+    RefsBloom {
+        /// The day of the filter.
+        day: Day,
+    },
+    /// `YYYYMMDD/trees.bloom`, the trees filter of the day.
+    TreesBloom {
+        /// The day of the filter.
+        day: Day,
+    },
+    /// `checkpoint/<writer_id>.json`
     Checkpoint {
         /// The writer it belongs to.
         writer_id: WriterId,
@@ -54,8 +64,10 @@ impl fmt::Display for ObjectName {
             ObjectName::RefsFile { day, nnnn } => {
                 write!(f, "{day}/{}-refs.parquet", u64::from(*nnnn))
             }
-            ObjectName::Manifest { day } => write!(f, "{day}/_manifest"),
-            ObjectName::Checkpoint { writer_id } => write!(f, "_checkpoint/{writer_id}.json"),
+            ObjectName::Manifest { day } => write!(f, "{day}/manifest"),
+            ObjectName::RefsBloom { day } => write!(f, "{day}/refs.bloom"),
+            ObjectName::TreesBloom { day } => write!(f, "{day}/trees.bloom"),
+            ObjectName::Checkpoint { writer_id } => write!(f, "checkpoint/{writer_id}.json"),
         }
     }
 }
@@ -83,14 +95,22 @@ mod tests {
         );
         assert_eq!(
             ObjectName::Manifest { day: day() }.to_string(),
-            "20260927/_manifest"
+            "20260927/manifest"
+        );
+        assert_eq!(
+            ObjectName::RefsBloom { day: day() }.to_string(),
+            "20260927/refs.bloom"
+        );
+        assert_eq!(
+            ObjectName::TreesBloom { day: day() }.to_string(),
+            "20260927/trees.bloom"
         );
         assert_eq!(
             ObjectName::Checkpoint {
                 writer_id: "writer-1".parse().unwrap()
             }
             .to_string(),
-            "_checkpoint/writer-1.json"
+            "checkpoint/writer-1.json"
         );
     }
 }

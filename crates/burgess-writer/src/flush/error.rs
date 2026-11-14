@@ -1,6 +1,6 @@
 //! Why a flush failed.
 
-use burgess_core::storage::{Day, DayError, ManifestError, WriterId};
+use burgess_core::storage::{BloomError, Day, DayError, ManifestError, WriterId};
 use jiff::Timestamp;
 
 use crate::parquet_files::FileError;
@@ -17,6 +17,12 @@ pub enum FlushError {
     /// The stored manifest is unreadable, or the new one could not be built.
     #[error("day manifest failed")]
     Manifest(#[from] ManifestError),
+    /// The bloom settings cannot size a filter.
+    #[error(transparent)]
+    BloomConfig(#[from] super::blooms::BloomConfigError),
+    /// A bloom filter of the day cannot be made.
+    #[error("bloom filter failed")]
+    Bloom(#[from] BloomError),
     /// The stored checkpoint is not valid JSON of the expected shape.
     /// Starting over instead would read every retained record again.
     #[error("stored checkpoint is unreadable")]
@@ -55,7 +61,7 @@ pub enum FlushError {
         day: Day,
     },
     /// Encoding was cancelled, because the runtime is shutting down. Nothing
-    /// was written yet.
+    /// was listed yet.
     #[error("flush cancelled while encoding")]
     Cancelled,
     /// This flush failed once its manifest write had started, so storage may

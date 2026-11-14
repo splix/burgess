@@ -112,7 +112,7 @@ async fn a_day_whose_bounds_exclude_the_tree_costs_its_manifest_only() {
 
     days.tree(tree, None).await;
 
-    assert_eq!(days.requests_on(second), [format!("{second}/_manifest")]);
+    assert_eq!(days.requests_on(second), [format!("{second}/manifest")]);
 }
 
 #[tokio::test]

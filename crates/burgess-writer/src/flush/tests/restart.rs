@@ -146,7 +146,7 @@ async fn first_start_reads_and_writes_nothing_else() {
     let flusher = flusher(&store, &TestClock::at(FIRST_FLUSH)).await;
     assert_eq!(flusher.checkpoint(), &Checkpoint::default());
     assert!(store.writes().is_empty());
-    assert_eq!(store.reads(), ["_checkpoint/writer-1.json"]);
+    assert_eq!(store.reads(), ["checkpoint/writer-1.json"]);
 }
 
 #[tokio::test]
@@ -175,7 +175,7 @@ async fn sealed_day_with_uncovered_flushes_refuses_to_start() {
     sealed.sealed = true;
     store
         .put(
-            &Path::from("20260927/_manifest"),
+            &Path::from("20260927/manifest"),
             sealed.encode().unwrap().into(),
         )
         .await
@@ -244,7 +244,7 @@ async fn missing_checkpoint_drops_nothing() {
         .unwrap();
     store
         .inner
-        .delete(&Path::from("_checkpoint/writer-1.json"))
+        .delete(&Path::from("checkpoint/writer-1.json"))
         .await
         .unwrap();
 
@@ -262,7 +262,7 @@ async fn foreign_manifest_of_another_day_does_not_block_the_start() {
     let foreign = DayManifest::new("20260926".parse().unwrap(), other);
     store
         .put(
-            &Path::from("20260926/_manifest"),
+            &Path::from("20260926/manifest"),
             foreign.encode().unwrap().into(),
         )
         .await

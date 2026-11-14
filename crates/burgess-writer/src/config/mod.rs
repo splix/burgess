@@ -27,6 +27,7 @@ use figment::providers::{Env, Format, Toml};
 
 use self::file::FileConfig;
 use crate::batch::{BatchConfig, BatchConfigError};
+use crate::flush::{BloomConfig, BloomConfigError};
 use crate::parquet_files::ParquetConfig;
 use crate::source::{KafkaConfig, KafkaLogError};
 use parquet::errors::ParquetError;
@@ -49,6 +50,8 @@ pub struct Settings {
     pub limits: Limits,
     /// How the Parquet files are encoded.
     pub parquet: ParquetConfig,
+    /// How the bloom filters of a day are sized.
+    pub bloom: BloomConfig,
 }
 
 /// Why the settings cannot be used.
@@ -69,6 +72,12 @@ pub enum ConfigError {
     /// The Parquet settings cannot be used.
     #[error("invalid parquet settings")]
     Parquet(#[source] ParquetError),
+    /// The bloom target rate is not a rate.
+    #[error("invalid bloom target_fpp")]
+    BloomRate(#[from] burgess_core::storage::FppError),
+    /// The bloom settings cannot be used.
+    #[error(transparent)]
+    Bloom(#[from] BloomConfigError),
 }
 
 impl Settings {

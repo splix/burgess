@@ -11,6 +11,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         [
             "burgess/wire/v1/record.proto",
             "burgess/storage/v1/manifest.proto",
+            "burgess/storage/v1/bloom.proto",
         ],
         ["proto"],
     )?;

@@ -7,7 +7,7 @@ syntax = "proto3";
 
 package burgess.storage.v1;
 
-// The list of data files of one day, stored as `YYYYMMDD/_manifest` with the
+// The list of data files of one day, stored as `YYYYMMDD/manifest` with the
 // magic `BGSM`. A data file not listed here does not exist for readers.
 message DayManifest {
   // Version of this message's meaning, so a reader can refuse a newer one.

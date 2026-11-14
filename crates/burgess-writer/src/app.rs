@@ -47,11 +47,20 @@ pub async fn run(settings: Settings, stop: watch::Receiver<bool>) -> Result<(), 
         batch_max_bytes = settings.batch.max_bytes,
         max_payload_bytes = settings.limits.max_payload_bytes,
         zstd_level = settings.parquet.zstd_level,
+        bloom_target_fpp = f64::from(settings.bloom.target_fpp),
+        bloom_min_bytes = settings.bloom.min_bytes,
         "starting"
     );
     let store = settings.store.open()?;
     let files = FileWriter::new(settings.parquet)?;
-    let flusher = Flusher::open(store, files, SystemClock, settings.writer_id).await?;
+    let flusher = Flusher::open(
+        store,
+        files,
+        SystemClock,
+        settings.writer_id,
+        settings.bloom,
+    )
+    .await?;
 
     let mut log = KafkaLog::new(settings.kafka)?;
     log.resume(&flusher.checkpoint().positions).await?;

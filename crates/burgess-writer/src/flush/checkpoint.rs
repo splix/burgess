@@ -1,6 +1,6 @@
 //! How far the writer has stored, so a restart continues from there.
 //!
-//! Stored as `_checkpoint/<writer_id>.json`. The location and format are
+//! Stored as `checkpoint/<writer_id>.json`. The location and format are
 //! provisional: JSON keeps the checkpoint easy to inspect and fix by hand
 //! while the design settles.
 

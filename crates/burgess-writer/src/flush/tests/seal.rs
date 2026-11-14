@@ -7,7 +7,7 @@ async fn sealed(store: &RecordingStore, day: &str) -> bool {
 }
 
 fn manifest_writes(store: &RecordingStore, day: &str) -> usize {
-    let path = format!("{day}/_manifest");
+    let path = format!("{day}/manifest");
     store
         .writes()
         .iter()
@@ -102,7 +102,7 @@ async fn failed_seal_writes_no_data_and_can_be_retried() {
     flusher.flush(batch(positions(&[(0, 2)]))).await.unwrap();
 
     clock.set("2026-09-28T00:10:00Z");
-    store.fail_writes_to(Some("20260927/_manifest"));
+    store.fail_writes_to(Some("20260927/manifest"));
     let writes = store.writes().len();
     assert!(matches!(
         flusher.flush(batch(positions(&[(0, 3)]))).await,

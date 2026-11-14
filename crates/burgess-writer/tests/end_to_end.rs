@@ -14,10 +14,11 @@ use std::time::{Duration, Instant};
 
 use arrow_array::{Array, FixedSizeBinaryArray};
 use burgess_client::{Emitter, KafkaSink, TreeId};
-use burgess_core::storage::DayManifest;
+use burgess_core::storage::{Day, DayManifest};
 use burgess_core::validation::Limits;
 use burgess_writer::batch::BatchConfig;
 use burgess_writer::config::{Settings, StoreConfig};
+use burgess_writer::flush::BloomConfig;
 use burgess_writer::parquet_files::ParquetConfig;
 use burgess_writer::source::KafkaConfig;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -119,6 +120,7 @@ fn settings(servers: &str, store: &Path) -> Settings {
         },
         limits: Limits::default(),
         parquet: ParquetConfig::default(),
+        bloom: BloomConfig::default(),
     }
 }
 
@@ -162,7 +164,8 @@ fn day_files(store: &Path, suffix: &str) -> Vec<PathBuf> {
         return Vec::new();
     };
     days.flatten()
-        .filter(|day| !day.file_name().to_string_lossy().starts_with('_'))
+        // The checkpoint folder is next to the days.
+        .filter(|day| day.file_name().to_string_lossy().parse::<Day>().is_ok())
         .flat_map(|day| fs::read_dir(day.path()).into_iter().flatten().flatten())
         .map(|file| file.path())
         .filter(|path| path.to_string_lossy().ends_with(suffix))
@@ -171,7 +174,7 @@ fn day_files(store: &Path, suffix: &str) -> Vec<PathBuf> {
 
 /// States and refs rows stored, as the day manifests count them.
 fn stored_rows(store: &Path) -> (u64, u64) {
-    day_files(store, "_manifest")
+    day_files(store, "/manifest")
         .iter()
         .map(|path| DayManifest::decode(&fs::read(path).unwrap()).unwrap())
         .flat_map(|manifest| manifest.entries)

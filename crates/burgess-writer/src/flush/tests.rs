@@ -17,6 +17,7 @@ use crate::parquet_files::{FileWriter, ParquetConfig};
 use crate::source::{PartitionId, Position};
 use crate::test_support::{RecordingStore, TestClock};
 
+mod blooms;
 mod restart;
 mod seal;
 
@@ -37,8 +38,17 @@ async fn open_flusher(
         FileWriter::new(ParquetConfig::default()).unwrap(),
         clock.clone(),
         writer_id(),
+        blooms(),
     )
     .await
+}
+
+/// Small filters, so that the tests store kilobytes, not megabytes.
+fn blooms() -> BloomConfig {
+    BloomConfig {
+        min_bytes: 64,
+        ..BloomConfig::default()
+    }
 }
 
 async fn flusher(store: &Arc<RecordingStore>, clock: &TestClock) -> Flusher<TestClock> {
@@ -90,17 +100,17 @@ async fn read(store: &RecordingStore, path: &str) -> Option<Bytes> {
 }
 
 async fn manifest(store: &RecordingStore, day: &str) -> Option<DayManifest> {
-    let bytes = read(store, &format!("{day}/_manifest")).await?;
+    let bytes = read(store, &format!("{day}/manifest")).await?;
     Some(DayManifest::decode(&bytes).unwrap())
 }
 
 async fn stored_checkpoint(store: &RecordingStore) -> Option<Checkpoint> {
-    let bytes = read(store, "_checkpoint/writer-1.json").await?;
+    let bytes = read(store, "checkpoint/writer-1.json").await?;
     Some(Checkpoint::from_json(&bytes).unwrap())
 }
 
 #[tokio::test]
-async fn writes_files_manifest_and_checkpoint_in_order() {
+async fn writes_files_blooms_manifest_and_checkpoint_in_order() {
     let store = Arc::new(RecordingStore::default());
     let clock = TestClock::at(FIRST_FLUSH);
     flusher(&store, &clock)
@@ -113,9 +123,11 @@ async fn writes_files_manifest_and_checkpoint_in_order() {
         [
             format!("20260927/{FIRST_NNNN}-states.parquet"),
             format!("20260927/{FIRST_NNNN}-refs.parquet"),
-            "_checkpoint/writer-1.json".to_string(),
-            "20260927/_manifest".to_string(),
-            "_checkpoint/writer-1.json".to_string(),
+            "20260927/refs.bloom".to_string(),
+            "20260927/trees.bloom".to_string(),
+            "checkpoint/writer-1.json".to_string(),
+            "20260927/manifest".to_string(),
+            "checkpoint/writer-1.json".to_string(),
         ]
     );
 }
@@ -204,8 +216,10 @@ async fn next_flush_appends_and_merges_positions() {
     assert_eq!(checkpoint.positions, positions(&[(0, 10), (1, 9)]));
 }
 
+/// The filters are written too: the day has them from its first flush, thus
+/// the flushes after it add to them.
 #[tokio::test]
-async fn empty_batch_writes_both_files_and_an_entry_without_bounds() {
+async fn empty_batch_writes_both_files_both_filters_and_an_entry_without_bounds() {
     let store = Arc::new(RecordingStore::default());
     let clock = TestClock::at(FIRST_FLUSH);
     let entry = flusher(&store, &clock)
@@ -213,7 +227,7 @@ async fn empty_batch_writes_both_files_and_an_entry_without_bounds() {
         .flush(Arc::default())
         .await
         .unwrap();
-    assert_eq!(store.writes().len(), 5);
+    assert_eq!(store.writes().len(), 7);
     assert_eq!(entry.states_bounds, None);
     assert_eq!((entry.states.rows, entry.refs.rows), (0, 0));
     assert!(entry.states.bytes > 0 && entry.refs.bytes > 0);
@@ -287,7 +301,7 @@ async fn failure_before_the_checkpoint_keeps_the_old_offsets() {
 
 #[tokio::test]
 async fn failure_at_the_manifest_or_later_needs_a_restart() {
-    for (failing, skip) in [("_manifest", 0), (".json", 1)] {
+    for (failing, skip) in [("/manifest", 0), (".json", 1)] {
         let store = Arc::new(RecordingStore::default());
         let clock = TestClock::at(FIRST_FLUSH);
         let mut flusher = flusher(&store, &clock).await;
@@ -345,7 +359,7 @@ async fn unreadable_checkpoint_is_an_error_not_a_fresh_start() {
     let store = Arc::new(RecordingStore::default());
     store
         .put(
-            &Path::from("_checkpoint/writer-1.json"),
+            &Path::from("checkpoint/writer-1.json"),
             b"not json".to_vec().into(),
         )
         .await
@@ -365,7 +379,7 @@ async fn refuses_to_add_to_a_sealed_day() {
     sealed.sealed = true;
     store
         .put(
-            &Path::from("20260927/_manifest"),
+            &Path::from("20260927/manifest"),
             sealed.encode().unwrap().into(),
         )
         .await
@@ -435,7 +449,7 @@ async fn refuses_a_manifest_of_another_writer() {
     let foreign = DayManifest::new("20260927".parse().unwrap(), other.clone());
     store
         .put(
-            &Path::from("20260927/_manifest"),
+            &Path::from("20260927/manifest"),
             foreign.encode().unwrap().into(),
         )
         .await

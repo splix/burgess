@@ -206,7 +206,7 @@ async fn a_day_without_references_costs_its_manifest_only() {
     let found = refs(&days, &query("ORD-1")).await;
 
     assert!(found.rows.is_empty());
-    assert_eq!(days.requests_on(day), [format!("{day}/_manifest")]);
+    assert_eq!(days.requests_on(day), [format!("{day}/manifest")]);
 }
 
 #[tokio::test]

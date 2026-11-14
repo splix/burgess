@@ -1,0 +1,35 @@
+// The bloom filter objects the writer keeps for each day.
+syntax = "proto3";
+
+package burgess.storage.v1;
+
+// The header of a bloom filter of one day, stored as `YYYYMMDD/refs.bloom`
+// with the magic `BGSB`, or as `YYYYMMDD/trees.bloom` with the magic `BGSC`.
+// The bits of the filter follow it, bit `i` in byte `i / 8` at bit `i % 8`,
+// lowest first.
+//
+// Format version 1 hashes a key with XXH3-64 at seed 0 and at seed 1, and
+// sets bit `(h0 + i * h1) mod bit_count` for each `i` below `hash_count`,
+// with the sum in 128 bits.
+message BloomHeader {
+  // Version of this message's meaning and of the hashing, so a reader can
+  // refuse a newer one.
+  uint32 format_version = 1;
+  // The day, "YYYYMMDD" by the writer clock.
+  string day = 2;
+  // The writer that owns the day.
+  string writer_id = 3;
+  // The bits that each key sets.
+  uint32 hash_count = 4;
+  // The bits of the filter, 8 for each byte that follows the header.
+  uint64 bit_count = 5;
+  // The keys that the filter holds at the target rate.
+  uint64 capacity = 6;
+  // The keys inserted.
+  uint64 insertion_count = 7;
+  // The false positive rate that the filter is sized for.
+  double target_fpp = 8;
+  // The part of the bits that are set, when the object was written. Only
+  // to diagnose: a full filter answers "maybe" to most keys.
+  double fill_ratio = 9;
+}

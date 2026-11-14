@@ -8,6 +8,7 @@ use bytes::Bytes;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 
+use super::blooms::{BloomConfig, DayBlooms};
 use super::checkpoint::{Checkpoint, PendingFlush};
 use super::clock::Clock;
 use super::error::FlushError;
@@ -16,14 +17,18 @@ use crate::parquet_files::{BatchFiles, FileWriter, ParquetFile};
 
 /// Stores batches, one flush at a time, and keeps the checkpoint.
 pub struct Flusher<C> {
-    store: Arc<dyn ObjectStore>,
+    pub(super) store: Arc<dyn ObjectStore>,
     files: Arc<FileWriter>,
     clock: C,
-    writer_id: WriterId,
+    pub(super) writer_id: WriterId,
+    pub(super) bloom_config: BloomConfig,
     pub(super) checkpoint: Checkpoint,
     /// The manifest of the day last flushed to, as last stored. This writer
     /// is its only author, so it needs no reading back until the day changes.
     manifest: Option<DayManifest>,
+    /// The bloom filters of the day last flushed to, as last stored, for
+    /// the same reason.
+    pub(super) blooms: Option<DayBlooms>,
     /// Set while a manifest may be ahead of the checkpoint; see
     /// [`FlushError::NeedsRestart`].
     needs_restart: bool,
@@ -41,7 +46,11 @@ impl<C: Clock> Flusher<C> {
         files: FileWriter,
         clock: C,
         writer_id: WriterId,
+        bloom_config: BloomConfig,
     ) -> Result<Self, FlushError> {
+        // Checked here too, as a wrong size would fail only at the first
+        // flush of the next day.
+        bloom_config.check()?;
         let name = ObjectName::Checkpoint {
             writer_id: writer_id.clone(),
         };
@@ -54,8 +63,10 @@ impl<C: Clock> Flusher<C> {
             files: Arc::new(files),
             clock,
             writer_id,
+            bloom_config,
             checkpoint,
             manifest: None,
+            blooms: None,
             needs_restart: false,
         };
         flusher.reconcile().await?;
@@ -67,8 +78,9 @@ impl<C: Clock> Flusher<C> {
         &self.checkpoint
     }
 
-    /// Stores `batch`: states file, refs file, day manifest, checkpoint, in
-    /// that order, named by the writer clock. Earlier days due for sealing
+    /// Stores `batch`: states file, refs file, the refs and trees bloom
+    /// filters of the day, day manifest, checkpoint, in that order, named by
+    /// the writer clock. Earlier days due for sealing
     /// are sealed first, and the checkpoint is also stored just before the
     /// manifest, naming the flush as pending.
     ///
@@ -88,6 +100,7 @@ impl<C: Clock> Flusher<C> {
         let unsealed = self
             .seal_earlier_days(&manifest, self.unsealed_before(day)?)
             .await?;
+        let blooms = self.day_blooms(&manifest).await?;
 
         let files = self.encode(Arc::clone(&batch)).await?;
         let entry = FlushEntry {
@@ -101,6 +114,7 @@ impl<C: Clock> Flusher<C> {
             .await?;
         self.put(&ObjectName::RefsFile { day, nnnn }, files.refs.bytes)
             .await?;
+        let blooms = self.store_blooms(blooms, Arc::clone(&batch), nnnn).await?;
 
         manifest.entries.push(entry.clone());
         let encoded = manifest.encode()?;
@@ -118,6 +132,7 @@ impl<C: Clock> Flusher<C> {
         self.put_checkpoint(&checkpoint).await.map_err(unfinished)?;
         self.checkpoint = checkpoint;
         self.manifest = Some(manifest);
+        self.blooms = Some(blooms.stored());
         self.needs_restart = false;
 
         tracing::info!(
@@ -202,13 +217,7 @@ impl<C: Clock> Flusher<C> {
     /// CPU, which would otherwise stall reading and the batch timers.
     async fn encode(&self, batch: Arc<SortedBatch>) -> Result<BatchFiles, FlushError> {
         let files = Arc::clone(&self.files);
-        match tokio::task::spawn_blocking(move || files.write_batch(&batch)).await {
-            Ok(encoded) => Ok(encoded?),
-            Err(failed) => match failed.try_into_panic() {
-                Ok(panic) => std::panic::resume_unwind(panic),
-                Err(_) => Err(FlushError::Cancelled),
-            },
-        }
+        Ok(on_blocking_thread(move || files.write_batch(&batch)).await??)
     }
 
     async fn put_checkpoint(&self, checkpoint: &Checkpoint) -> Result<(), FlushError> {
@@ -225,6 +234,20 @@ impl<C: Clock> Flusher<C> {
     }
 }
 
+/// What `work` gives, done on a blocking thread, away from the threads that
+/// read records and run the batch timers. A panic in it goes on here.
+pub(super) async fn on_blocking_thread<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, FlushError> {
+    match tokio::task::spawn_blocking(work).await {
+        Ok(done) => Ok(done),
+        Err(failed) => match failed.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(_) => Err(FlushError::Cancelled),
+        },
+    }
+}
+
 /// The UTC day of a flush time.
 fn day_of(nnnn: UnixMillis) -> Result<Day, FlushError> {
     let time = nnnn
@@ -234,7 +257,10 @@ fn day_of(nnnn: UnixMillis) -> Result<Day, FlushError> {
 }
 
 /// The object's bytes, or `None` if it does not exist.
-async fn get(store: &dyn ObjectStore, name: &ObjectName) -> Result<Option<Bytes>, FlushError> {
+pub(super) async fn get(
+    store: &dyn ObjectStore,
+    name: &ObjectName,
+) -> Result<Option<Bytes>, FlushError> {
     match store.get(&Path::from(name.to_string())).await {
         Ok(stored) => Ok(Some(stored.bytes().await?)),
         Err(object_store::Error::NotFound { .. }) => Ok(None),

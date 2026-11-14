@@ -1,7 +1,7 @@
 //! The settings as written in the file, before they are checked.
 
 use std::collections::BTreeMap;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
 use burgess_core::validation::Limits;
@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use super::{ConfigError, Settings};
 use crate::batch::BatchConfig;
+use crate::flush::BloomConfig;
 use crate::parquet_files::ParquetConfig;
 use crate::source::KafkaConfig;
 
@@ -29,6 +30,8 @@ pub(super) struct FileConfig {
     limits: LimitsSection,
     #[serde(default)]
     parquet: ParquetSection,
+    #[serde(default)]
+    bloom: BloomSection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +74,16 @@ struct ParquetSection {
     data_page_bytes: NonZeroUsize,
 }
 
+/// The rate is a number like `0.01`, the floor in bytes.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+struct BloomSection {
+    target_fpp: f64,
+    window_days: NonZeroU32,
+    multiplier: f64,
+    min_bytes: u64,
+}
+
 fn default_request_timeout() -> Duration {
     KafkaConfig::new("", "").request_timeout
 }
@@ -106,6 +119,18 @@ impl Default for ParquetSection {
     }
 }
 
+impl Default for BloomSection {
+    fn default() -> Self {
+        let defaults = BloomConfig::default();
+        BloomSection {
+            target_fpp: defaults.target_fpp.into(),
+            window_days: defaults.window_days,
+            multiplier: defaults.multiplier,
+            min_bytes: defaults.min_bytes,
+        }
+    }
+}
+
 impl TryFrom<FileConfig> for Settings {
     type Error = ConfigError;
 
@@ -133,6 +158,13 @@ impl TryFrom<FileConfig> for Settings {
             data_page_bytes: file.parquet.data_page_bytes,
         };
         parquet.compression().map_err(ConfigError::Parquet)?;
+        let bloom = BloomConfig {
+            target_fpp: file.bloom.target_fpp.try_into()?,
+            window_days: file.bloom.window_days,
+            multiplier: file.bloom.multiplier,
+            min_bytes: file.bloom.min_bytes,
+        };
+        bloom.check()?;
         Ok(Settings {
             writer_id: file.writer_id.parse()?,
             kafka,
@@ -142,6 +174,7 @@ impl TryFrom<FileConfig> for Settings {
                 max_payload_bytes: file.limits.max_payload_bytes,
             },
             parquet,
+            bloom,
         })
     }
 }

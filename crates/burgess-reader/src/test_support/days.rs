@@ -143,7 +143,7 @@ impl Days {
         self.store
             .paths()
             .iter()
-            .filter(|path| path.ends_with("_manifest"))
+            .filter(|path| path.ends_with("/manifest"))
             .map(|path| path[..8].parse().unwrap())
             .collect()
     }

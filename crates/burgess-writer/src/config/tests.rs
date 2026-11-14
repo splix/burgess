@@ -5,7 +5,7 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::BTreeMap;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
 use figment::Jail;
@@ -56,6 +56,7 @@ fn minimal_file_gets_every_default() {
         assert_eq!(settings.batch, BatchConfig::default());
         assert_eq!(settings.limits, Limits::default());
         assert_eq!(settings.parquet, ParquetConfig::default());
+        assert_eq!(settings.bloom, BloomConfig::default());
     });
 }
 
@@ -89,6 +90,12 @@ max_payload_bytes = 2048
 zstd_level = 9
 max_row_group_rows = 100
 data_page_bytes = 4096
+
+[bloom]
+target_fpp = 0.001
+window_days = 7
+multiplier = 2.0
+min_bytes = 4096
 "#;
     load_in_jail(toml, &[], |settings| {
         let settings = settings.unwrap();
@@ -121,6 +128,15 @@ data_page_bytes = 4096
         assert_eq!(settings.parquet.zstd_level, 9);
         assert_eq!(settings.parquet.max_row_group_rows.get(), 100);
         assert_eq!(settings.parquet.data_page_bytes.get(), 4096);
+        assert_eq!(
+            settings.bloom,
+            BloomConfig {
+                target_fpp: 0.001.try_into().unwrap(),
+                window_days: NonZeroU32::new(7).unwrap(),
+                multiplier: 2.0,
+                min_bytes: 4096,
+            }
+        );
     });
 }
 
@@ -202,6 +218,32 @@ fn rejects_invalid_values() {
             assert!(settings.is_err(), "{what} accepted");
         });
     }
+}
+
+/// A filter must have a size, and the rate must be a rate, or no flush
+/// could be stored.
+#[test]
+fn rejects_bloom_settings_that_cannot_size_a_filter() {
+    let bloom = |line: &str| format!("{MINIMAL}\n[bloom]\n{line}\n");
+    for line in ["target_fpp = 0.0", "target_fpp = 1.0", "target_fpp = nan"] {
+        load_in_jail(&bloom(line), &[], |settings| {
+            assert!(matches!(settings, Err(ConfigError::BloomRate(_))), "{line}");
+        });
+    }
+    for line in [
+        "multiplier = 0.0",
+        "multiplier = -1.5",
+        "multiplier = inf",
+        "multiplier = nan",
+        "min_bytes = 1073741825",
+    ] {
+        load_in_jail(&bloom(line), &[], |settings| {
+            assert!(matches!(settings, Err(ConfigError::Bloom(_))), "{line}");
+        });
+    }
+    load_in_jail(&bloom("window_days = 0"), &[], |settings| {
+        assert!(matches!(settings, Err(ConfigError::Invalid(_))));
+    });
 }
 
 #[test]
